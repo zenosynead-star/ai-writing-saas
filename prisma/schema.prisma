@@ -1,0 +1,234 @@
+// AIライティングSaaS Prisma schema
+// 要件定義書 11.3 に基づくデータモデル
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Plan {
+  id              String   @id @default(cuid())
+  name            String   @unique // Free / Lite / Standard / Pro / Enterprise
+  monthlyCredits  Int
+  maxArticles     Int
+  maxSites        Int
+  maxRankKeywords Int
+  maxImages       Int
+  priceJpy        Int
+  extraUnitJpy    Int      // 追加クレジット単価
+  isActive        Boolean  @default(true)
+  users           User[]
+  subscriptions   Subscription[]
+  createdAt       DateTime @default(now())
+}
+
+model User {
+  id                  String   @id @default(cuid())
+  email               String   @unique
+  passwordHash        String
+  name                String
+  language            String   @default("ja")
+  planId              String
+  plan                Plan     @relation(fields: [planId], references: [id])
+  currentCredits      Int      @default(0)
+  referralCode        String   @unique
+  referredByCode      String?
+  emailVerifiedAt     DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  subscriptions       Subscription[]
+  creditTransactions  CreditTransaction[]
+  sites               Site[]
+  articles            Article[]
+  images              GeneratedImage[]
+  llmoBrands          LlmoBrand[]
+  llmoPrompts         LlmoPrompt[]
+  sessions            Session[]
+}
+
+model Session {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token       String   @unique
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  lastUsedAt  DateTime @default(now())
+
+  @@index([userId])
+}
+
+model Subscription {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planId        String
+  plan          Plan     @relation(fields: [planId], references: [id])
+  startedAt     DateTime @default(now())
+  nextRenewalAt DateTime
+  status        String   // active / canceled / past_due
+  paymentMethod String?  // card / invoice
+  createdAt     DateTime @default(now())
+
+  @@index([userId])
+}
+
+model CreditTransaction {
+  id                String   @id @default(cuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  amount            Int      // 正: 付与 / 負: 消費
+  balanceAfter      Int
+  reason            String   // monthly_grant / consumption / purchase / refund
+  relatedResourceId String?
+  meta              String?  // JSON文字列で詳細
+  createdAt         DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model Site {
+  id                      String   @id @default(cuid())
+  userId                  String
+  user                    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  domain                  String
+  type                    String   // own / competitor
+  businessArea            String?
+  searchConsoleConnected  Boolean  @default(false)
+  createdAt               DateTime @default(now())
+  articles                Article[]
+  keywords                Keyword[]
+
+  @@index([userId])
+}
+
+model Keyword {
+  id            String   @id @default(cuid())
+  siteId        String
+  site          Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  keyword       String
+  monthlyVolume Int?
+  maxRank       Int      @default(100)
+  frequency     String   @default("daily") // daily / weekly / monthly
+  createdAt     DateTime @default(now())
+
+  @@index([siteId])
+}
+
+model Article {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  siteId      String?
+  site        Site?    @relation(fields: [siteId], references: [id])
+  title       String
+  keywords    String   // JSON配列
+  status      String   @default("draft") // draft / generating / completed / failed
+  language    String   @default("ja")
+  // ステップ間の中間ステート
+  step        Int      @default(1)
+  persona     String?
+  searchIntent String?
+  latentNeeds  String?  // JSON配列
+  toneSample   String?
+  volumeSpec   String?  // 充実 / 指定なし / 簡潔
+  customInstruction String?
+  bodyHtml     String?
+  metaDescription String?
+  modelUsed    String?
+  totalCreditsUsed Int  @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  headings     ArticleHeading[]
+
+  @@index([userId, createdAt])
+}
+
+model ArticleHeading {
+  id         String   @id @default(cuid())
+  articleId  String
+  article    Article  @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  level      Int      // 2..6
+  text       String
+  parentId   String?
+  parent     ArticleHeading? @relation("HeadingTree", fields: [parentId], references: [id])
+  children   ArticleHeading[] @relation("HeadingTree")
+  order      Int
+  bodyHtml   String?
+
+  @@index([articleId])
+}
+
+model GeneratedImage {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  articleId  String?
+  prompt     String
+  style      String?
+  template   String?
+  url        String?
+  model      String?
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+}
+
+model LlmoBrand {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  aliases   String   // JSON配列
+  domain    String?
+  isOwn     Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model LlmoPrompt {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  promptText String
+  createdAt  DateTime @default(now())
+  records    LlmoRecord[]
+
+  @@index([userId])
+}
+
+model LlmoRecord {
+  id           String   @id @default(cuid())
+  promptId     String
+  prompt       LlmoPrompt @relation(fields: [promptId], references: [id], onDelete: Cascade)
+  date         DateTime
+  aiService    String   // chatgpt / gemini / claude / perplexity / google_ai_overviews
+  responseText String
+  mentions     String   // JSON配列
+
+  @@index([promptId, date])
+}
+
+// プロンプトテンプレートDB管理 (要件定義書 12.2)
+model PromptTemplate {
+  id           String   @id @default(cuid())
+  name         String
+  taskType     String   // title / heading / body / advice / image_prompt / llmo_parse / keyword
+  language     String   @default("ja")
+  targetModel  String   @default("any")
+  templateText String
+  variables    String?  // JSON
+  version      Int      @default(1)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([name, version])
+  @@index([taskType, language, isActive])
+}

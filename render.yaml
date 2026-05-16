@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: ai-writing-saas
+    runtime: node
+    region: singapore
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 20.18.0
+      - key: NEXT_TELEMETRY_DISABLED
+        value: "1"
+      # 以下はRender Dashboardで設定（render.yaml にコミットしない）
+      # - DATABASE_URL  (Neon Postgres接続URL)
+      # - DIRECT_URL    (同上、Prisma migrate用)
+      # - JWT_SECRET    (openssl rand -hex 32)
+      # - ANTHROPIC_API_KEY
+      # - ANTHROPIC_MODEL_HIGH / BALANCED / LOW
