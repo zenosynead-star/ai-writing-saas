@@ -41,69 +41,39 @@ npm run dev
 
 ブラウザで http://localhost:3000 を開く。
 
-## クラウドデプロイ（Render + Neon Postgres）
+## クラウドデプロイ（Render Blueprint一発デプロイ）
 
-### 必要なアカウント（全て電話番号認証不要・無料）
+### 必要なアカウント
 
-1. **GitHub** — ソースコード管理。なければ https://github.com/signup
-2. **Neon** — Postgres DB。 https://neon.tech （GitHubで即ログイン可）
-3. **Render** — Webホスティング。 https://render.com （GitHubで即ログイン可）
+1. **GitHub** — ソースコード管理（既存）
+2. **Render** — Webホスティング+Postgres。 https://render.com （GitHubで即ログイン可、電話認証不要）
+3. **Anthropic API Key** — https://console.anthropic.com/ で発行
+
+DBはRender Postgres Freeを `render.yaml` で自動作成。
 
 ### 手順
 
-#### 1) Neon Postgres を作成
-
-1. https://neon.tech にアクセス → GitHub でサインアップ
-2. 「New Project」→ Region: `Tokyo (ap-northeast-1)` 推奨 → 作成
-3. 「Connection string」をコピー（`postgresql://...?sslmode=require` 形式）
-4. もう一度同じ画面の「Show details」→ Pooled / Direct 両方のURLが出る
-   - `DATABASE_URL` には **Pooled connection** を使う
-   - `DIRECT_URL` には **Direct connection** を使う
-
-#### 2) GitHub にコードを push
-
-```powershell
-cd C:\Users\bootu\OneDrive\デスクトップ\claude\ai-writing-saas
-git init
-git add .
-git commit -m "Initial commit: SEO/LLMO AI Writing SaaS MVP"
-# GitHubで新規リポジトリ「ai-writing-saas」を作成（Privateでも可）
-git remote add origin https://github.com/<your-username>/ai-writing-saas.git
-git branch -M main
-git push -u origin main
-```
-
-#### 3) Render で Web Service を作成
+#### 1) Render でBlueprintをデプロイ
 
 1. https://render.com にアクセス → GitHubでサインアップ
-2. Dashboard で「**New +**」→ **Web Service**
-3. 「Connect a repository」で先ほどpushしたリポジトリを選択
-4. 設定は `render.yaml` から自動読込される。手動なら:
-   - Name: `ai-writing-saas`
-   - Region: Singapore
-   - Branch: `main`
-   - Runtime: `Node`
-   - Build Command: `npm install && npm run build`
-   - Start Command: `npm start`
-   - Plan: `Free`
+2. Dashboard で「**New +**」→ **Blueprint**
+3. リポジトリ `zenosynead-star/ai-writing-saas` を選択
+4. Render が `render.yaml` を読み取り、サービス + DBを自動作成
+   - Web Service: `ai-writing-saas` (Free)
+   - Database: `ai-writing-saas-db` (Free PostgreSQL 16)
+   - `DATABASE_URL` 自動接続、`JWT_SECRET` 自動生成
 
-#### 4) Render の「Environment」で環境変数を設定
+#### 2) Anthropic API Key を投入
 
-| キー | 値 |
-|---|---|
-| `DATABASE_URL` | Neon の **Pooled** connection string |
-| `DIRECT_URL` | Neon の **Direct** connection string |
-| `JWT_SECRET` | 64文字以上のランダム文字列（PowerShellで `[System.Convert]::ToBase64String((1..48 \| ForEach-Object {Get-Random -Max 256}))`） |
-| `ANTHROPIC_API_KEY` | https://console.anthropic.com/ で発行 |
-| `ANTHROPIC_MODEL_HIGH` | `claude-opus-4-7` |
-| `ANTHROPIC_MODEL_BALANCED` | `claude-sonnet-4-6` |
-| `ANTHROPIC_MODEL_LOW` | `claude-haiku-4-5-20251001` |
-| `NEXT_TELEMETRY_DISABLED` | `1` |
+1. Render Dashboard → `ai-writing-saas` サービス → **Environment** タブ
+2. `ANTHROPIC_API_KEY` の値を https://console.anthropic.com/ で発行したキーに設定
+3. Save → 自動再デプロイ
 
-#### 5) Deploy ボタンを押す
+#### 3) デプロイ完了確認
 
-最初のデプロイは3〜5分。ビルドログで Prisma db push と seed の実行を確認。
-完了すると `https://ai-writing-saas-XXXX.onrender.com` でアクセス可能。
+最初のデプロイは3〜5分。
+- Build logs で `prisma db push` と seed の実行を確認
+- 完了すると `https://ai-writing-saas-XXXX.onrender.com` でアクセス可能
 
 ### Render Free プランの注意点
 

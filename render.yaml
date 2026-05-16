@@ -1,3 +1,10 @@
+databases:
+  - name: ai-writing-saas-db
+    plan: free
+    region: singapore
+    postgresMajorVersion: "16"
+    ipAllowList: [] # 公開IP不要・Renderサービスからのみ接続
+
 services:
   - type: web
     name: ai-writing-saas
@@ -7,14 +14,24 @@ services:
     buildCommand: npm install && npm run build
     startCommand: npm start
     autoDeploy: true
+    healthCheckPath: /
     envVars:
       - key: NODE_VERSION
         value: 20.18.0
       - key: NEXT_TELEMETRY_DISABLED
         value: "1"
-      # 以下はRender Dashboardで設定（render.yaml にコミットしない）
-      # - DATABASE_URL  (Neon Postgres接続URL)
-      # - DIRECT_URL    (同上、Prisma migrate用)
-      # - JWT_SECRET    (openssl rand -hex 32)
-      # - ANTHROPIC_API_KEY
-      # - ANTHROPIC_MODEL_HIGH / BALANCED / LOW
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ai-writing-saas-db
+          property: connectionString
+      # 以下はRender Dashboardで手動投入（Blueprintのsync=falseで通常ファイル外で管理）
+      - key: JWT_SECRET
+        generateValue: true     # Renderが自動でランダム値生成
+      - key: ANTHROPIC_API_KEY
+        sync: false             # Dashboardで手動投入
+      - key: ANTHROPIC_MODEL_HIGH
+        value: claude-opus-4-7
+      - key: ANTHROPIC_MODEL_BALANCED
+        value: claude-sonnet-4-6
+      - key: ANTHROPIC_MODEL_LOW
+        value: claude-haiku-4-5-20251001
