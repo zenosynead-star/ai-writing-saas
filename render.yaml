@@ -1,9 +1,5 @@
-databases:
-  - name: ai-writing-saas-db
-    plan: free
-    region: singapore
-    postgresMajorVersion: "16"
-    ipAllowList: [] # 公開IP不要・Renderサービスからのみ接続
+# DB は外部のNeon (https://neon.tech) を使用
+# Render Free Tier の "1アカウント1DB" 制約を回避
 
 services:
   - type: web
@@ -21,9 +17,7 @@ services:
       - key: NEXT_TELEMETRY_DISABLED
         value: "1"
       - key: DATABASE_URL
-        fromDatabase:
-          name: ai-writing-saas-db
-          property: connectionString
+        sync: false             # Render Dashboardで手動投入（Neonの接続URL）
       - key: JWT_SECRET
         generateValue: true     # Renderが自動でランダム値生成
       - key: GOOGLE_API_KEY
