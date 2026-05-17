@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
       system: BASE_SYSTEM,
       user: KEYWORD_EXPLORE_PROMPT({ theme: sanitizeUserInput(theme), language: user.language }),
       maxTokens: 3000,
-      cacheSystem: true,
+      jsonMode: true,
     });
 
     const json = extractJson<{ keywords: KeywordResult[] }>(result.content);

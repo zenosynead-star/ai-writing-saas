@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
         userCustomInstruction: customInstruction ? sanitizeUserInput(customInstruction) : undefined,
       }),
       maxTokens: 4000,
-      cacheSystem: true,
+      jsonMode: true,
     });
 
     const json = extractJson<HeadingResult>(result.content);

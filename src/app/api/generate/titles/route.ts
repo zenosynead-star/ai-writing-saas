@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
         persona: '自動推定（後続ステップで詳細化）',
       }),
       maxTokens: 2000,
-      cacheSystem: true,
+      jsonMode: true,
     });
 
     const json = extractJson<{ titles: TitleResult[] }>(result.content);

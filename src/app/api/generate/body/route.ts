@@ -71,7 +71,6 @@ export async function POST(req: NextRequest) {
           volumeSpec: article.volumeSpec || undefined,
         }),
         maxTokens: 16000,
-        cacheSystem: true,
         temperature: 0.65,
       });
 
