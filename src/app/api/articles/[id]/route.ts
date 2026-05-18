@@ -31,7 +31,6 @@ const PatchSchema = z.object({
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const user = await getCurrentUser();
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const article = await prisma.article.findFirst({ where: { id, userId: user.id } });
   if (!article) return NextResponse.json({ error: 'Not found' }, { status: 404 });
@@ -49,7 +48,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (parsed.data.keywords) data.keywords = JSON.stringify(parsed.data.keywords);
   if (parsed.data.latentNeeds) data.latentNeeds = JSON.stringify(parsed.data.latentNeeds);
 
-  let updated = await prisma.article.update({ where: { id }, data });
+  await prisma.article.update({ where: { id }, data });
 
   // Replace headings if provided
   if (parsed.data.headings) {
@@ -81,7 +80,6 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const user = await getCurrentUser();
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const article = await prisma.article.findFirst({ where: { id, userId: user.id } });
   if (!article) return NextResponse.json({ error: 'Not found' }, { status: 404 });
   await prisma.article.delete({ where: { id } });

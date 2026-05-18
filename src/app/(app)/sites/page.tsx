@@ -3,7 +3,7 @@ import { prisma } from '@/lib/db';
 import SiteManager from './SiteManager';
 
 export default async function SitesPage() {
-  const user = (await getCurrentUser())!;
+  const user = await getCurrentUser();
   const sites = await prisma.site.findMany({
     where: { userId: user.id },
     orderBy: { createdAt: 'desc' },
@@ -15,7 +15,7 @@ export default async function SitesPage() {
       <div>
         <h1 className="text-2xl font-bold">サイト管理</h1>
         <p className="text-sm text-slate-600 mt-1">
-          自社サイト・競合サイトを登録します（{sites.length} / {user.plan.maxSites}）
+          自社サイト・競合サイトを登録します（{sites.length} サイト）
         </p>
       </div>
 
@@ -28,7 +28,6 @@ export default async function SitesPage() {
           searchConsoleConnected: s.searchConsoleConnected,
           keywordCount: s.keywords.length,
         }))}
-        maxSites={user.plan.maxSites}
       />
     </div>
   );

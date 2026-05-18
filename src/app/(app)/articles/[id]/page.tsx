@@ -6,7 +6,7 @@ import ArticleEditor from './ArticleEditor';
 
 export default async function ArticleDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const user = (await getCurrentUser())!;
+  const user = await getCurrentUser();
   const article = await prisma.article.findFirst({
     where: { id, userId: user.id },
     include: { headings: { orderBy: { order: 'asc' } } },
@@ -25,7 +25,7 @@ export default async function ArticleDetailPage({ params }: { params: Promise<{ 
           <Link href="/articles" className="text-sm text-slate-500 hover:text-slate-700">← 記事一覧</Link>
           <h1 className="text-2xl font-bold mt-1">{article.title}</h1>
           <div className="text-xs text-slate-500 mt-1">
-            キーワード: {keywords.join(', ')} ・ {article.modelUsed} ・ 消費 {article.totalCreditsUsed} CR
+            キーワード: {keywords.join(', ')} ・ モデル: {article.modelUsed || '-'}
           </div>
         </div>
         <div className="flex gap-2">

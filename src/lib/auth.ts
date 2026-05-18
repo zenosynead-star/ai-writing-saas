@@ -1,102 +1,71 @@
-import { SignJWT, jwtVerify } from 'jose';
-import { cookies } from 'next/headers';
-import bcrypt from 'bcryptjs';
+// 認証機能は無効化（個人ツールとしての利用）
+// すべての操作は固定の "default user" として実行される
 import { prisma } from './db';
-import { randomBytes } from 'crypto';
 
-const SECRET = new TextEncoder().encode(process.env.JWT_SECRET ?? 'dev-secret-change-me-please-this-is-long-enough');
-const COOKIE_NAME = 'awsaas_session';
-const ACTIVE_DAYS = 30;
+const DEFAULT_USER_ID = 'default-user';
 
-export async function hashPassword(plain: string) {
-  return bcrypt.hash(plain, 12);
-}
+export type DefaultUser = {
+  id: string;
+  email: string;
+  name: string;
+  language: string;
+  currentCredits: number;
+  plan: { name: string };
+};
 
-export async function verifyPassword(plain: string, hash: string) {
-  return bcrypt.compare(plain, hash);
-}
-
-export function generateReferralCode(): string {
-  return randomBytes(4).toString('hex').toUpperCase();
-}
-
-export async function createSession(userId: string) {
-  const token = randomBytes(32).toString('hex');
-  const expiresAt = new Date(Date.now() + ACTIVE_DAYS * 24 * 60 * 60 * 1000);
-
-  await prisma.session.create({
-    data: { userId, token, expiresAt },
+/**
+ * 認証なし版の getCurrentUser
+ * 固定のデフォルトユーザーを返す（無ければ自動作成）
+ */
+export async function getCurrentUser(): Promise<DefaultUser> {
+  let user = await prisma.user.findUnique({
+    where: { id: DEFAULT_USER_ID },
+    include: { plan: true },
   });
-
-  const jwt = await new SignJWT({ sub: userId, sid: token })
-    .setProtectedHeader({ alg: 'HS256' })
-    .setIssuedAt()
-    .setExpirationTime(`${ACTIVE_DAYS}d`)
-    .sign(SECRET);
-
-  const cookieStore = await cookies();
-  cookieStore.set(COOKIE_NAME, jwt, {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
-    path: '/',
-    expires: expiresAt,
-  });
-
-  return token;
-}
-
-export async function destroySession() {
-  const cookieStore = await cookies();
-  const jwt = cookieStore.get(COOKIE_NAME)?.value;
-  if (jwt) {
-    try {
-      const { payload } = await jwtVerify(jwt, SECRET);
-      if (payload.sid) {
-        await prisma.session.deleteMany({ where: { token: payload.sid as string } });
-      }
-    } catch {}
-  }
-  cookieStore.delete(COOKIE_NAME);
-}
-
-export async function getCurrentUser() {
-  const cookieStore = await cookies();
-  const jwt = cookieStore.get(COOKIE_NAME)?.value;
-  if (!jwt) return null;
-
-  try {
-    const { payload } = await jwtVerify(jwt, SECRET);
-    const sid = payload.sid as string;
-    const session = await prisma.session.findUnique({
-      where: { token: sid },
-      include: { user: { include: { plan: true } } },
-    });
-    if (!session) return null;
-    if (session.expiresAt < new Date()) {
-      await prisma.session.delete({ where: { id: session.id } });
-      return null;
-    }
-    // 非アクティブ7日チェック
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    if (session.lastUsedAt < sevenDaysAgo) {
-      await prisma.session.delete({ where: { id: session.id } });
-      return null;
-    }
-    await prisma.session.update({
-      where: { id: session.id },
-      data: { lastUsedAt: new Date() },
-    });
-    return session.user;
-  } catch {
-    return null;
-  }
-}
-
-export async function requireUser() {
-  const user = await getCurrentUser();
   if (!user) {
-    throw new Response('Unauthorized', { status: 401 });
+    // 初回アクセス時に自動作成
+    user = await ensureDefaultUser();
   }
-  return user;
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    language: user.language,
+    currentCredits: user.currentCredits,
+    plan: { name: user.plan.name },
+  };
+}
+
+async function ensureDefaultUser() {
+  // 何かしらのプランが必要なので、最初のプランを取得（無ければ作成）
+  let plan = await prisma.plan.findFirst();
+  if (!plan) {
+    plan = await prisma.plan.create({
+      data: {
+        name: 'Unlimited',
+        monthlyCredits: 999999,
+        maxArticles: 999999,
+        maxSites: 999999,
+        maxRankKeywords: 999999,
+        maxImages: 999999,
+        priceJpy: 0,
+        extraUnitJpy: 0,
+      },
+    });
+  }
+  return prisma.user.upsert({
+    where: { id: DEFAULT_USER_ID },
+    update: {},
+    create: {
+      id: DEFAULT_USER_ID,
+      email: 'default@local',
+      passwordHash: 'unused',
+      name: 'Default User',
+      language: 'ja',
+      planId: plan.id,
+      currentCredits: 999999,
+      referralCode: 'DEFAULT',
+    },
+    include: { plan: true },
+  });
 }

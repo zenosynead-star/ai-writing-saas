@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth';
 import { prisma } from '@/lib/db';
-import { consumeCredits, CREDIT_COST } from '@/lib/credits';
 import { generate, extractJson, BASE_SYSTEM, sanitizeUserInput } from '@/lib/llm';
 import { HEADING_GENERATION_PROMPT } from '@/lib/prompts';
 import { validateHeadingTree } from '@/lib/headings';
@@ -22,7 +21,6 @@ interface HeadingResult {
 export async function POST(req: NextRequest) {
   try {
     const user = await getCurrentUser();
-    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const parsed = Schema.safeParse(await req.json());
     if (!parsed.success) return NextResponse.json({ error: 'Invalid' }, { status: 400 });
@@ -34,11 +32,6 @@ export async function POST(req: NextRequest) {
     const keywords = JSON.parse(article.keywords || '[]') as string[];
     if (keywords.length === 0) {
       return NextResponse.json({ error: 'まずキーワードを設定してください' }, { status: 400 });
-    }
-
-    const cost = CREDIT_COST.heading_generation;
-    if (user.currentCredits < cost) {
-      return NextResponse.json({ error: 'クレジットが不足しています' }, { status: 402 });
     }
 
     const result = await generate({
@@ -57,18 +50,6 @@ export async function POST(req: NextRequest) {
     if (!validateHeadingTree(json.headings)) {
       throw new Error('Invalid heading tree shape');
     }
-
-    await consumeCredits({
-      userId: user.id,
-      amount: cost,
-      description: '見出し構成生成',
-      relatedResourceId: articleId,
-    });
-
-    await prisma.article.update({
-      where: { id: articleId },
-      data: { totalCreditsUsed: { increment: cost } },
-    });
 
     return NextResponse.json({
       estimated_persona: json.estimated_persona,

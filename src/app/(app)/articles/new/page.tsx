@@ -5,8 +5,6 @@ import { prisma } from '@/lib/db';
 async function createArticleAndRedirect() {
   'use server';
   const user = await getCurrentUser();
-  if (!user) throw new Error('Unauthorized');
-
   const article = await prisma.article.create({
     data: {
       userId: user.id,

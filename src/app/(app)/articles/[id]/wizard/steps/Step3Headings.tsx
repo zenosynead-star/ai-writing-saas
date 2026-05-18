@@ -201,7 +201,7 @@ export default function Step3Headings({
           onChange={(e) => setCustomInstruction(e.target.value)}
         />
         <button onClick={generate} disabled={loading} className="btn-primary">
-          {loading ? '生成中…（10〜20秒）' : tree.length > 0 ? '見出し再生成（消費2CR）' : 'AIで見出し生成（消費2CR）'}
+          {loading ? '生成中…（10〜20秒）' : tree.length > 0 ? '見出し再生成' : 'AIで見出し生成'}
         </button>
       </div>
 

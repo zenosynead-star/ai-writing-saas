@@ -75,7 +75,6 @@ export default function Step5Body({
         <button onClick={generate} disabled={loading} className="btn-primary">
           {loading ? '生成中…（30〜90秒）' : bodyHtml ? '本文再生成' : '本文を生成する'}
         </button>
-        <span className="text-xs text-slate-500">消費: 10〜20CR（モデルにより変動）</span>
       </div>
 
       {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded p-3">{error}</div>}

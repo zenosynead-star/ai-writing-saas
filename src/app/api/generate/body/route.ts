@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth';
 import { prisma } from '@/lib/db';
-import { consumeCredits, CREDIT_COST } from '@/lib/credits';
 import { generate, BASE_SYSTEM, type LogicalModel } from '@/lib/llm';
 import { BODY_GENERATION_PROMPT } from '@/lib/prompts';
 import { z } from 'zod';
@@ -30,7 +29,6 @@ function extractMetaDescription(html: string): { html: string; meta: string } {
 export async function POST(req: NextRequest) {
   try {
     const user = await getCurrentUser();
-    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const parsed = Schema.safeParse(await req.json());
     if (!parsed.success) return NextResponse.json({ error: 'Invalid' }, { status: 400 });
@@ -46,11 +44,6 @@ export async function POST(req: NextRequest) {
     const keywords = JSON.parse(article.keywords || '[]') as string[];
     if (keywords.length === 0 || !article.title || article.headings.length === 0) {
       return NextResponse.json({ error: 'キーワード/タイトル/見出しが揃っていません' }, { status: 400 });
-    }
-
-    const cost = logicalModel === 'low_cost' ? CREDIT_COST.body_standard : logicalModel === 'high_quality' ? CREDIT_COST.body_max : CREDIT_COST.body_high;
-    if (user.currentCredits < cost) {
-      return NextResponse.json({ error: `クレジット不足（必要: ${cost} CR）` }, { status: 402 });
     }
 
     await prisma.article.update({ where: { id: articleId }, data: { status: 'generating' } });
@@ -76,20 +69,12 @@ export async function POST(req: NextRequest) {
 
       const { html, meta } = extractMetaDescription(result.content);
 
-      await consumeCredits({
-        userId: user.id,
-        amount: cost,
-        description: `本文生成（${logicalModel}）`,
-        relatedResourceId: articleId,
-      });
-
       await prisma.article.update({
         where: { id: articleId },
         data: {
           bodyHtml: html,
           metaDescription: meta,
           modelUsed: result.actualModel,
-          totalCreditsUsed: { increment: cost },
           status: 'draft',
         },
       });

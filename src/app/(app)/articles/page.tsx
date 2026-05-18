@@ -3,7 +3,7 @@ import { getCurrentUser } from '@/lib/auth';
 import { prisma } from '@/lib/db';
 
 export default async function ArticlesPage() {
-  const user = (await getCurrentUser())!;
+  const user = await getCurrentUser();
   const articles = await prisma.article.findMany({
     where: { userId: user.id },
     orderBy: { updatedAt: 'desc' },
@@ -29,7 +29,6 @@ export default async function ArticlesPage() {
                 <th className="text-left px-4 py-3 font-medium text-slate-600">タイトル</th>
                 <th className="text-left px-4 py-3 font-medium text-slate-600">キーワード</th>
                 <th className="text-left px-4 py-3 font-medium text-slate-600">ステータス</th>
-                <th className="text-right px-4 py-3 font-medium text-slate-600">消費CR</th>
                 <th className="text-right px-4 py-3 font-medium text-slate-600">更新日</th>
               </tr>
             </thead>
@@ -49,7 +48,6 @@ export default async function ArticlesPage() {
                     <td className="px-4 py-3">
                       <StatusBadge status={a.status} />
                     </td>
-                    <td className="px-4 py-3 text-right text-slate-600">{a.totalCreditsUsed}</td>
                     <td className="px-4 py-3 text-right text-slate-500">{new Date(a.updatedAt).toLocaleDateString('ja-JP')}</td>
                   </tr>
                 );

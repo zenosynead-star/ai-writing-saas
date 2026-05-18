@@ -12,7 +12,7 @@ interface Site {
   keywordCount: number;
 }
 
-export default function SiteManager({ initialSites, maxSites }: { initialSites: Site[]; maxSites: number }) {
+export default function SiteManager({ initialSites }: { initialSites: Site[] }) {
   const router = useRouter();
   const [sites, setSites] = useState(initialSites);
   const [domain, setDomain] = useState('');
@@ -24,10 +24,6 @@ export default function SiteManager({ initialSites, maxSites }: { initialSites: 
   const add = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    if (sites.length >= maxSites) {
-      setError(`プラン上限（${maxSites}）に達しています`);
-      return;
-    }
     setLoading(true);
     const res = await fetch('/api/sites', {
       method: 'POST',

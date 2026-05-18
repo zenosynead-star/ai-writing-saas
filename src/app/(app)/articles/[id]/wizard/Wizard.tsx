@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Step1Keywords from './steps/Step1Keywords';
 import Step2Title from './steps/Step2Title';
@@ -34,29 +34,12 @@ const STEPS = [
 export default function Wizard({
   articleId,
   initialState,
-  currentCredits,
-  planName,
 }: {
   articleId: string;
   initialState: WizardState;
-  currentCredits: number;
-  planName: string;
 }) {
   const router = useRouter();
   const [state, setState] = useState(initialState);
-  const [credits, setCredits] = useState(currentCredits);
-
-  // 一定間隔でクレジット残高をリフレッシュ
-  useEffect(() => {
-    const id = setInterval(async () => {
-      const res = await fetch('/api/me');
-      if (res.ok) {
-        const data = await res.json();
-        setCredits(data.user.currentCredits);
-      }
-    }, 5000);
-    return () => clearInterval(id);
-  }, []);
 
   const goToStep = (step: number) => {
     setState((s) => ({ ...s, step }));
@@ -67,25 +50,11 @@ export default function Wizard({
     });
   };
 
-  const refreshCredits = async () => {
-    const res = await fetch('/api/me');
-    if (res.ok) {
-      const data = await res.json();
-      setCredits(data.user.currentCredits);
-    }
-  };
+  const noop = () => {};
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">記事作成ウィザード</h1>
-        <div className="text-sm">
-          <span className="text-slate-500">{planName}プラン</span>
-          <span className="mx-2 text-slate-300">|</span>
-          <span className="text-slate-500">残高:</span>
-          <span className="ml-1 font-bold text-brand-700">{credits.toLocaleString()} CR</span>
-        </div>
-      </div>
+      <h1 className="text-2xl font-bold">記事作成ウィザード</h1>
 
       <StepIndicator currentStep={state.step} onJump={goToStep} state={state} />
 
@@ -96,7 +65,7 @@ export default function Wizard({
             state={state}
             setState={setState}
             onNext={() => goToStep(2)}
-            onCreditsChange={refreshCredits}
+            onCreditsChange={noop}
           />
         )}
         {state.step === 2 && (
@@ -106,7 +75,7 @@ export default function Wizard({
             setState={setState}
             onPrev={() => goToStep(1)}
             onNext={() => goToStep(3)}
-            onCreditsChange={refreshCredits}
+            onCreditsChange={noop}
           />
         )}
         {state.step === 3 && (
@@ -116,7 +85,7 @@ export default function Wizard({
             setState={setState}
             onPrev={() => goToStep(2)}
             onNext={() => goToStep(4)}
-            onCreditsChange={refreshCredits}
+            onCreditsChange={noop}
           />
         )}
         {state.step === 4 && (
@@ -135,7 +104,7 @@ export default function Wizard({
             setState={setState}
             onPrev={() => goToStep(4)}
             onComplete={() => router.push(`/articles/${articleId}`)}
-            onCreditsChange={refreshCredits}
+            onCreditsChange={noop}
           />
         )}
       </div>
@@ -164,7 +133,7 @@ function StepIndicator({
   return (
     <div className="card p-3">
       <div className="flex items-center justify-between gap-1">
-        {STEPS.map((s, i) => {
+        {STEPS.map((s) => {
           const active = s.num === currentStep;
           const done = s.num < currentStep && canJumpTo(s.num);
           const enabled = canJumpTo(s.num);

@@ -70,22 +70,22 @@ export default function Step4Options({
               active={model === 'low_cost'}
               onClick={() => setModel('low_cost')}
               title="標準"
-              cost="10 CR"
-              desc="Claude Haiku 相当・最速"
+              cost="Flash-Lite"
+              desc="Gemini 2.5 Flash-Lite・最速"
             />
             <ModelOption
               active={model === 'balanced'}
               onClick={() => setModel('balanced')}
               title="高性能"
-              cost="15 CR"
-              desc="Claude Sonnet 相当・バランス"
+              cost="Flash"
+              desc="Gemini 2.5 Flash・バランス"
             />
             <ModelOption
               active={model === 'high_quality'}
               onClick={() => setModel('high_quality')}
               title="最高性能"
-              cost="20 CR"
-              desc="Claude Opus 相当・最高品質"
+              cost="Pro"
+              desc="Gemini 2.5 Pro・最高品質"
             />
           </div>
         </div>

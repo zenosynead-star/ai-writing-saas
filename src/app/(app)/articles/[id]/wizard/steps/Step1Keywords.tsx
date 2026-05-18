@@ -101,7 +101,7 @@ export default function Step1Keywords({
 
       <div className="flex gap-2 border-b border-slate-200">
         <ModeTab active={mode === 'direct'} onClick={() => setMode('direct')}>直接入力</ModeTab>
-        <ModeTab active={mode === 'theme'} onClick={() => setMode('theme')}>テーマから探索（消費1CR）</ModeTab>
+        <ModeTab active={mode === 'theme'} onClick={() => setMode('theme')}>テーマから探索</ModeTab>
       </div>
 
       {mode === 'direct' && (

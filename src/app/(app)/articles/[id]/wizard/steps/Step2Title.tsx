@@ -91,7 +91,7 @@ export default function Step2Title({
 
       <div className="flex items-center gap-3">
         <button onClick={generate} disabled={loading} className="btn-primary">
-          {loading ? '生成中…' : suggestions.length > 0 ? 'タイトル再生成（消費1CR）' : 'AIでタイトル生成（消費1CR）'}
+          {loading ? '生成中…' : suggestions.length > 0 ? 'タイトル再生成' : 'AIでタイトル生成'}
         </button>
         <span className="text-xs text-slate-500">4つの訴求軸でタイトル案を生成します</span>
       </div>

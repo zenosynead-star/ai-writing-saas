@@ -5,7 +5,7 @@ import Wizard from './Wizard';
 
 export default async function WizardPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const user = (await getCurrentUser())!;
+  const user = await getCurrentUser();
   const article = await prisma.article.findFirst({
     where: { id, userId: user.id },
     include: { headings: { orderBy: { order: 'asc' } } },
@@ -32,8 +32,6 @@ export default async function WizardPage({ params }: { params: Promise<{ id: str
         bodyHtml: article.bodyHtml || '',
         metaDescription: article.metaDescription || '',
       }}
-      currentCredits={user.currentCredits}
-      planName={user.plan.name}
     />
   );
 }

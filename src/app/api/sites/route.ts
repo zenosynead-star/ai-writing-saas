@@ -12,15 +12,9 @@ const Schema = z.object({
 export async function POST(req: NextRequest) {
   try {
     const user = await getCurrentUser();
-    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const parsed = Schema.safeParse(await req.json());
     if (!parsed.success) return NextResponse.json({ error: parsed.error.errors.map((e) => e.message).join(', ') }, { status: 400 });
-
-    const count = await prisma.site.count({ where: { userId: user.id } });
-    if (count >= user.plan.maxSites) {
-      return NextResponse.json({ error: `プラン上限（${user.plan.maxSites}）に達しています` }, { status: 403 });
-    }
 
     const existing = await prisma.site.findFirst({
       where: { userId: user.id, domain: parsed.data.domain },
