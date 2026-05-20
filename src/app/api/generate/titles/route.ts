@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth';
 import { prisma } from '@/lib/db';
-import { generate, extractJson, BASE_SYSTEM } from '@/lib/llm';
+import { generate, extractJson, BASE_SYSTEM, llmErrorToResponse } from '@/lib/llm';
 import { TITLE_GENERATION_PROMPT } from '@/lib/prompts';
 import { z } from 'zod';
 
@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
     const user = await getCurrentUser();
 
     const parsed = Schema.safeParse(await req.json());
-    if (!parsed.success) return NextResponse.json({ error: 'Invalid' }, { status: 400 });
+    if (!parsed.success) return NextResponse.json({ error: 'リクエストが不正です' }, { status: 400 });
     const { articleId } = parsed.data;
 
     const article = await prisma.article.findFirst({ where: { id: articleId, userId: user.id } });
@@ -38,16 +38,19 @@ export async function POST(req: NextRequest) {
         keywords,
         persona: '自動推定（後続ステップで詳細化）',
       }),
-      maxTokens: 2000,
+      maxTokens: 4000,
       jsonMode: true,
     });
 
     const json = extractJson<{ titles: TitleResult[] }>(result.content);
-    if (!Array.isArray(json.titles)) throw new Error('Invalid title response shape');
+    if (!Array.isArray(json.titles)) {
+      return NextResponse.json({ error: 'AI出力の形式が想定外でした。再試行してください。' }, { status: 502 });
+    }
 
     return NextResponse.json({ titles: json.titles });
   } catch (err) {
-    console.error(err);
-    return NextResponse.json({ error: (err as Error).message }, { status: 500 });
+    console.error('[titles]', err);
+    const { status, body } = llmErrorToResponse(err);
+    return NextResponse.json(body, { status });
   }
 }

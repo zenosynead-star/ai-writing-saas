@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth';
 import { prisma } from '@/lib/db';
-import { generate, BASE_SYSTEM, type LogicalModel } from '@/lib/llm';
+import { generate, BASE_SYSTEM, type LogicalModel, llmErrorToResponse } from '@/lib/llm';
 import { BODY_GENERATION_PROMPT } from '@/lib/prompts';
 import { z } from 'zod';
 
@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
     const user = await getCurrentUser();
 
     const parsed = Schema.safeParse(await req.json());
-    if (!parsed.success) return NextResponse.json({ error: 'Invalid' }, { status: 400 });
+    if (!parsed.success) return NextResponse.json({ error: 'リクエストが不正です' }, { status: 400 });
     const { articleId, model } = parsed.data;
     const logicalModel: LogicalModel = model ?? 'balanced';
 
@@ -85,7 +85,8 @@ export async function POST(req: NextRequest) {
       throw err;
     }
   } catch (err) {
-    console.error(err);
-    return NextResponse.json({ error: (err as Error).message }, { status: 500 });
+    console.error('[body]', err);
+    const { status, body } = llmErrorToResponse(err);
+    return NextResponse.json(body, { status });
   }
 }

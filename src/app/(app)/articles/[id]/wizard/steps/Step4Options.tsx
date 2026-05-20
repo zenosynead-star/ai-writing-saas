@@ -71,23 +71,26 @@ export default function Step4Options({
               onClick={() => setModel('low_cost')}
               title="標準"
               cost="Flash-Lite"
-              desc="Gemini 2.5 Flash-Lite・最速"
+              desc="安定・最速（推奨）"
             />
             <ModelOption
               active={model === 'balanced'}
               onClick={() => setModel('balanced')}
               title="高性能"
               cost="Flash"
-              desc="Gemini 2.5 Flash・バランス"
+              desc="混雑時はLite自動切替"
             />
             <ModelOption
               active={model === 'high_quality'}
               onClick={() => setModel('high_quality')}
               title="最高性能"
               cost="Pro"
-              desc="Gemini 2.5 Pro・最高品質"
+              desc="無料枠超は自動でLite"
             />
           </div>
+          <p className="mt-2 text-xs text-slate-500">
+            ※ 無料tier運用のため、Flash / Pro が混雑・上限到達時は自動でFlash-Liteへフォールバックします。
+          </p>
         </div>
 
         <div>

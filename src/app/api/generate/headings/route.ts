@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth';
 import { prisma } from '@/lib/db';
-import { generate, extractJson, BASE_SYSTEM, sanitizeUserInput } from '@/lib/llm';
+import { generate, extractJson, BASE_SYSTEM, sanitizeUserInput, llmErrorToResponse } from '@/lib/llm';
 import { HEADING_GENERATION_PROMPT } from '@/lib/prompts';
 import { validateHeadingTree } from '@/lib/headings';
 import { z } from 'zod';
@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
     const user = await getCurrentUser();
 
     const parsed = Schema.safeParse(await req.json());
-    if (!parsed.success) return NextResponse.json({ error: 'Invalid' }, { status: 400 });
+    if (!parsed.success) return NextResponse.json({ error: 'リクエストが不正です' }, { status: 400 });
     const { articleId, customInstruction } = parsed.data;
 
     const article = await prisma.article.findFirst({ where: { id: articleId, userId: user.id } });
@@ -42,13 +42,13 @@ export async function POST(req: NextRequest) {
         keywords,
         userCustomInstruction: customInstruction ? sanitizeUserInput(customInstruction) : undefined,
       }),
-      maxTokens: 4000,
+      maxTokens: 8000,
       jsonMode: true,
     });
 
     const json = extractJson<HeadingResult>(result.content);
     if (!validateHeadingTree(json.headings)) {
-      throw new Error('Invalid heading tree shape');
+      return NextResponse.json({ error: 'AI出力の構造が想定外でした。再試行してください。' }, { status: 502 });
     }
 
     return NextResponse.json({
@@ -58,7 +58,8 @@ export async function POST(req: NextRequest) {
       headings: json.headings,
     });
   } catch (err) {
-    console.error(err);
-    return NextResponse.json({ error: (err as Error).message }, { status: 500 });
+    console.error('[headings]', err);
+    const { status, body } = llmErrorToResponse(err);
+    return NextResponse.json(body, { status });
   }
 }

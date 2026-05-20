@@ -15,11 +15,18 @@ export type TaskType =
   | 'llmo_parse'
   | 'image_prompt';
 
+// E2Eテスト結果（2026-05-20）に基づくモデル選定:
+// - gemini-2.5-pro: 無料tier では使用不可（quota=0）→ 安定モデルにフォールバック
+// - gemini-2.5-flash: 容量逼迫で 503 頻発 → 同上
+// - gemini-2.5-flash-lite: 安定動作（無料tier 1500req/日）→ デフォルト採用
 const MODEL_MAP: Record<LogicalModel, string> = {
-  high_quality: process.env.GEMINI_MODEL_HIGH || 'gemini-2.5-pro',
-  balanced: process.env.GEMINI_MODEL_BALANCED || 'gemini-2.5-flash',
+  high_quality: process.env.GEMINI_MODEL_HIGH || 'gemini-2.5-flash-lite',
+  balanced: process.env.GEMINI_MODEL_BALANCED || 'gemini-2.5-flash-lite',
   low_cost: process.env.GEMINI_MODEL_LOW || 'gemini-2.5-flash-lite',
 };
+
+// 503/429 時のフォールバック先候補（順次試す）
+const FALLBACK_MODELS = ['gemini-2.5-flash-lite', 'gemini-2.0-flash-lite', 'gemini-2.0-flash'];
 
 let client: GoogleGenerativeAI | null = null;
 function getClient(): GoogleGenerativeAI {
@@ -64,9 +71,76 @@ export function sanitizeUserInput(input: string): string {
     .slice(0, 20000);
 }
 
+/**
+ * Try to repair an incomplete JSON string (e.g. truncated due to maxTokens).
+ * Walks the bracket stack and closes any remaining open braces/brackets.
+ * Also removes a dangling partial object/array element at the end.
+ */
+function repairTruncatedJson(text: string): string {
+  // Walk char-by-char tracking string state and bracket depth
+  const stack: string[] = [];
+  let inString = false;
+  let escape = false;
+  let lastValidEnd = -1;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (escape) { escape = false; continue; }
+    if (inString) {
+      if (ch === '\\') { escape = true; continue; }
+      if (ch === '"') { inString = false; }
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === '{' || ch === '[') stack.push(ch);
+    else if (ch === '}') {
+      if (stack[stack.length - 1] === '{') stack.pop();
+      if (stack.length === 1 && (stack[0] === '[' || stack[0] === '{')) lastValidEnd = i;
+    }
+    else if (ch === ']') {
+      if (stack[stack.length - 1] === '[') stack.pop();
+      if (stack.length === 0) lastValidEnd = i;
+    }
+  }
+
+  // If parseable as-is, return
+  if (stack.length === 0) return text;
+
+  // Truncate to last complete element + close brackets
+  let truncated = lastValidEnd >= 0 ? text.slice(0, lastValidEnd + 1) : text;
+  // Remove trailing comma if any
+  truncated = truncated.replace(/,\s*$/, '');
+
+  // Now close stack from the un-truncated original (recompute depth in truncated)
+  const reStack: string[] = [];
+  let inStr2 = false;
+  let esc2 = false;
+  for (let i = 0; i < truncated.length; i++) {
+    const ch = truncated[i];
+    if (esc2) { esc2 = false; continue; }
+    if (inStr2) {
+      if (ch === '\\') { esc2 = true; continue; }
+      if (ch === '"') inStr2 = false;
+      continue;
+    }
+    if (ch === '"') { inStr2 = true; continue; }
+    if (ch === '{' || ch === '[') reStack.push(ch);
+    else if (ch === '}' && reStack[reStack.length - 1] === '{') reStack.pop();
+    else if (ch === ']' && reStack[reStack.length - 1] === '[') reStack.pop();
+  }
+
+  // Close remaining brackets in reverse order
+  while (reStack.length) {
+    const open = reStack.pop();
+    truncated += open === '{' ? '}' : ']';
+  }
+  return truncated;
+}
+
 export function extractJson<T = unknown>(text: string): T {
-  // Strip code fences if present
   let cleaned = text.trim();
+
+  // Strip code fences if present
   const fenceMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
   if (fenceMatch) cleaned = fenceMatch[1].trim();
 
@@ -74,23 +148,62 @@ export function extractJson<T = unknown>(text: string): T {
   const firstBrace = cleaned.search(/[\[{]/);
   if (firstBrace > 0) cleaned = cleaned.slice(firstBrace);
 
-  // Trim trailing junk after last closing brace
+  // Trim trailing junk after last closing brace (best effort)
   const lastBrace = Math.max(cleaned.lastIndexOf('}'), cleaned.lastIndexOf(']'));
   if (lastBrace > 0 && lastBrace < cleaned.length - 1) {
     cleaned = cleaned.slice(0, lastBrace + 1);
   }
 
+  // Attempt 1: direct parse
   try {
     return JSON.parse(cleaned) as T;
-  } catch (err) {
-    throw new Error(`Failed to parse JSON from LLM output: ${(err as Error).message}\nRaw: ${text.slice(0, 500)}`);
+  } catch {
+    // Attempt 2: repair truncated JSON and try again
+    try {
+      const repaired = repairTruncatedJson(cleaned);
+      return JSON.parse(repaired) as T;
+    } catch (err2) {
+      throw new Error(`AI出力のJSON解析に失敗しました。もう一度お試しください。(${(err2 as Error).message.slice(0, 80)})`);
+    }
   }
 }
 
-export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
-  const c = getClient();
-  const modelName = MODEL_MAP[opts.logicalModel ?? 'balanced'];
+class UpstreamError extends Error {
+  constructor(public statusCode: number, public retryable: boolean, message: string) {
+    super(message);
+  }
+}
 
+function classifyError(err: unknown): UpstreamError {
+  const msg = (err as Error).message || String(err);
+  // 429 / Quota exceeded
+  if (/429|quota|exceeded your current quota/i.test(msg)) {
+    return new UpstreamError(429, false, msg);
+  }
+  // 503 / overloaded / Service Unavailable
+  if (/503|UNAVAILABLE|overloaded|currently experiencing high demand/i.test(msg)) {
+    return new UpstreamError(503, true, msg);
+  }
+  // 500 / Internal
+  if (/500|INTERNAL/i.test(msg)) {
+    return new UpstreamError(500, true, msg);
+  }
+  // network/timeout
+  if (/timeout|ECONNRESET|ETIMEDOUT/i.test(msg)) {
+    return new UpstreamError(504, true, msg);
+  }
+  return new UpstreamError(0, false, msg);
+}
+
+async function sleep(ms: number) {
+  return new Promise<void>((r) => setTimeout(r, ms));
+}
+
+async function callModelOnce(
+  modelName: string,
+  opts: GenerateOptions,
+): Promise<GenerateResult> {
+  const c = getClient();
   const generationConfig: GenerationConfig = {
     maxOutputTokens: opts.maxTokens ?? 4096,
     temperature: opts.temperature ?? 0.7,
@@ -98,17 +211,14 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
   if (opts.jsonMode) {
     generationConfig.responseMimeType = 'application/json';
   }
-
   const model = c.getGenerativeModel({
     model: modelName,
     systemInstruction: opts.system,
     generationConfig,
   });
-
   const resp = await model.generateContent(opts.user);
   const text = resp.response.text();
   const usage = resp.response.usageMetadata;
-
   return {
     content: text,
     actualModel: modelName,
@@ -117,6 +227,61 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
     cacheReadTokens: 0,
     cacheCreationTokens: 0,
   };
+}
+
+/**
+ * Robust generate(): exponential backoff for 503/500, fallback to other models on 429.
+ */
+export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
+  const requested = MODEL_MAP[opts.logicalModel ?? 'balanced'];
+  const tryOrder = [requested, ...FALLBACK_MODELS.filter((m) => m !== requested)];
+
+  let lastError: UpstreamError | null = null;
+  for (const modelName of tryOrder) {
+    // up to 3 attempts per model with exp backoff
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await callModelOnce(modelName, opts);
+      } catch (err) {
+        const upstream = classifyError(err);
+        lastError = upstream;
+        if (upstream.statusCode === 429) {
+          // quota exhausted for this model — move on to fallback
+          break;
+        }
+        if (!upstream.retryable) {
+          // non-retryable error → bail
+          throw upstream;
+        }
+        const wait = 1000 * Math.pow(2, attempt); // 1s, 2s, 4s
+        await sleep(wait);
+      }
+    }
+  }
+  throw lastError ?? new UpstreamError(500, false, 'unknown LLM error');
+}
+
+/**
+ * Map upstream LLM error to user-facing HTTP response shape.
+ */
+export function llmErrorToResponse(err: unknown): { status: number; body: { error: string } } {
+  if (err instanceof UpstreamError) {
+    if (err.statusCode === 429) {
+      return { status: 429, body: { error: 'AI APIの無料枠を使い切ったか、レート制限に達しました。しばらく待ってから再試行してください。' } };
+    }
+    if (err.statusCode === 503 || err.statusCode === 504) {
+      return { status: 503, body: { error: 'AI APIが現在混雑しています。10〜30秒待ってから再試行してください。' } };
+    }
+    if (err.statusCode === 500) {
+      return { status: 502, body: { error: 'AI APIで内部エラーが発生しました。再試行してください。' } };
+    }
+  }
+  const msg = (err as Error).message || 'Unknown error';
+  // JSON parse error: pass through (already user-facing)
+  if (/AI出力のJSON解析/.test(msg)) {
+    return { status: 502, body: { error: msg } };
+  }
+  return { status: 500, body: { error: 'サーバー内部エラーが発生しました。' } };
 }
 
 /** 全社共通のシステムプロンプト基底 */
