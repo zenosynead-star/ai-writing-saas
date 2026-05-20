@@ -7,6 +7,7 @@ const NAV_ITEMS = [
   { href: '/dashboard', label: 'ダッシュボード' },
   { href: '/articles', label: '記事一覧' },
   { href: '/articles/new', label: '記事作成' },
+  { href: '/rewrite', label: 'リライト' },
   { href: '/sites', label: 'サイト管理' },
 ];
 

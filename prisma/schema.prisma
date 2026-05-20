@@ -142,6 +142,10 @@ model Article {
   metaDescription String?
   modelUsed    String?
   adviceJson   String?  // アドバイス機能の結果（要件5.6.3）
+  // リライト機能（要件5.7）用フィールド
+  sourceUrl    String?  // リライト元のURL
+  originalBodyHtml String? // リライト元の本文HTML（差分表示用）
+  rewriteMode  String?  // structure_preserve / restructure / partial
   totalCreditsUsed Int  @default(0)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt

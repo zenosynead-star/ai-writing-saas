@@ -177,6 +177,66 @@ ${vars.headingTree}
 - まとめ: 最後の<h2>と<p>
 - メタディスクリプション: 末尾にHTMLコメントで <!-- META: ... --> 形式（120字以内）`;
 
+export const REWRITE_GENERATION_PROMPT = (vars: {
+  sourceUrl: string;
+  originalTitle: string;
+  originalMeta: string;
+  originalHeadingsMarkdown: string;
+  originalBodySummary: string; // 主要段落の連結（長すぎる場合は切り詰め）
+  mode: 'structure_preserve' | 'restructure' | 'partial';
+  additionalInstruction?: string;
+}) => {
+  const modeInstructions = {
+    structure_preserve: '見出し構造は元記事を維持しつつ、本文の質を向上させる（情報追加・冗長な箇所の削除・E-E-A-T要素の強化）。',
+    restructure: '元記事の論点は活かしつつ、見出し構成をSEO観点で最適化する（重複の統合・抜けの補完・FAQ追加）。',
+    partial: '元記事の冒頭リード文とまとめだけを刷新する（中間の見出しは触らない）。',
+  } as const;
+
+  return `# 役割
+あなたはSEOの専門家で、既存記事のリライトを担当しています。
+以下の方針に従い、元記事を改善した新しい記事をHTML形式で出力してください。
+
+# 元記事
+URL: ${vars.sourceUrl}
+タイトル: ${vars.originalTitle}
+メタディスクリプション: ${vars.originalMeta}
+
+## 元記事の見出し構成
+${vars.originalHeadingsMarkdown || '（見出し抽出失敗、本文から推測してください）'}
+
+## 元記事の本文要約
+${vars.originalBodySummary.slice(0, 6000)}
+
+# リライトモード
+${modeInstructions[vars.mode]}
+
+# 追加指示
+${vars.additionalInstruction || '（なし）'}
+
+# 執筆ルール
+1. 元記事の本文をそのままコピーしない。表現を変え、独自性を出す。
+2. 検索意図とNeeds Met基準を満たす網羅性を確保。
+3. E-E-A-T要素（経験・専門性・権威性・信頼性）を1箇所以上追加する余地を [実例:〇〇] タグで明示。
+4. キーワード密度2〜4%、PREP法を基本構造に。
+5. 「です・ます」調で統一、1文80字以内。
+6. <strong> で重要キーワードを強調（h2あたり1-2回）。
+7. 不確かな数値・固有名詞は出力しない（ハルシネーション防止）。
+8. 競合記事や元記事との明らかな類似（パラフレーズで多様性確保）。
+
+# 禁止事項
+- AI由来であることを示唆する表現
+- 同じ表現を3回以上繰り返す
+- 「いかがでしたか？」「ぜひ参考にしてください」等の定型句
+- <script>, <iframe>, <style>, onclick等のイベントハンドラ
+
+# 出力形式
+純粋なHTML形式のみ。前後に説明文・マークダウン・コードフェンスを付けない。
+- リード文: <p>（h2の前）
+- 各セクション: <h2>/<h3>/<p>/<ul>/<ol>/<table>/<strong>
+- まとめ: 最後の<h2>と<p>
+- 末尾にメタディスクリプションを <!-- META: ... --> 形式で（120字以内）`;
+};
+
 export const ADVICE_PROMPT = (vars: { articleHtml: string }) => `あなたはSEOコンサルタントです。以下のAI生成記事を読み、
 より検索上位を獲得するために人間が加えるべき独自性のあるコンテンツを5つ提案してください。
 
