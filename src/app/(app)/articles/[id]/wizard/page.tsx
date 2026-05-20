@@ -28,6 +28,7 @@ export default async function WizardPage({ params }: { params: Promise<{ id: str
         toneSample: article.toneSample || '',
         volumeSpec: article.volumeSpec || '',
         customInstruction: article.customInstruction || '',
+        modelChoice: (article.modelChoice as 'low_cost' | 'balanced' | 'high_quality' | null) || 'balanced',
         headings: article.headings,
         bodyHtml: article.bodyHtml || '',
         metaDescription: article.metaDescription || '',

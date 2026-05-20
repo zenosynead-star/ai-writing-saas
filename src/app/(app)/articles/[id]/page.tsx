@@ -12,7 +12,8 @@ export default async function ArticleDetailPage({ params }: { params: Promise<{ 
     include: { headings: { orderBy: { order: 'asc' } } },
   });
   if (!article) notFound();
-  if (article.status !== 'completed') {
+  // 本文があれば完了扱い、無ければウィザードへ
+  if (!article.bodyHtml) {
     redirect(`/articles/${article.id}/wizard`);
   }
 
@@ -33,7 +34,12 @@ export default async function ArticleDetailPage({ params }: { params: Promise<{ 
         </div>
       </div>
 
-      <ArticleEditor articleId={article.id} initialHtml={article.bodyHtml || ''} initialMeta={article.metaDescription || ''} />
+      <ArticleEditor
+        articleId={article.id}
+        initialHtml={article.bodyHtml || ''}
+        initialMeta={article.metaDescription || ''}
+        initialAdvice={article.adviceJson ? JSON.parse(article.adviceJson) : []}
+      />
     </div>
   );
 }

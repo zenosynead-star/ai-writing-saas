@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
+import { sanitizeHtml } from '@/lib/sanitize';
 import type { WizardState } from '../Wizard';
 
 export default function Step5Body({
@@ -27,11 +28,10 @@ export default function Step5Body({
     setError(null);
     setLoading(true);
     try {
-      const model = (typeof window !== 'undefined' && sessionStorage.getItem(`article-${articleId}-model`)) || 'balanced';
       const res = await fetch('/api/generate/body', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ articleId, model }),
+        body: JSON.stringify({ articleId, model: state.modelChoice }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -61,6 +61,7 @@ export default function Step5Body({
   };
 
   const wordCount = bodyHtml.replace(/<[^>]+>/g, '').length;
+  const safeBodyHtml = useMemo(() => sanitizeHtml(bodyHtml), [bodyHtml]);
 
   return (
     <div className="space-y-6">
@@ -90,7 +91,7 @@ export default function Step5Body({
           <div className="card p-6 max-h-[600px] overflow-y-auto">
             <div
               className="article-preview"
-              dangerouslySetInnerHTML={{ __html: bodyHtml }}
+              dangerouslySetInnerHTML={{ __html: safeBodyHtml }}
             />
             <style>{`
               .article-preview h2 { font-size: 1.4rem; font-weight: 700; margin-top: 1.5rem; margin-bottom: 0.5rem; color: #0f172a; border-bottom: 1px solid #e2e8f0; padding-bottom: 0.25rem; }

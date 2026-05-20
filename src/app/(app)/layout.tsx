@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import MobileNav from '@/components/MobileNav';
 
 // (app) 配下はDBアクセスを伴うため動的レンダリングに固定（ビルド時 prerender を回避）
 export const dynamic = 'force-dynamic';
@@ -7,9 +8,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen">
       <header className="border-b border-slate-200 bg-white sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between gap-4">
+        <div className="max-w-7xl mx-auto px-4 md:px-6 py-3 flex items-center justify-between gap-4">
           <div className="flex items-center gap-6">
-            <Link href="/dashboard" className="font-bold text-xl text-brand-700">
+            <Link href="/dashboard" className="font-bold text-lg md:text-xl text-brand-700">
               AI Writing Tool
             </Link>
             <nav className="hidden md:flex items-center gap-1 text-sm">
@@ -19,9 +20,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               <Link href="/sites" className="px-3 py-1.5 rounded hover:bg-slate-100 text-slate-700">サイト管理</Link>
             </nav>
           </div>
+          <MobileNav />
         </div>
       </header>
-      <main className="max-w-7xl mx-auto px-6 py-8">{children}</main>
+      <main className="max-w-7xl mx-auto px-4 md:px-6 py-6 md:py-8">{children}</main>
     </div>
   );
 }

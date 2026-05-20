@@ -75,7 +75,7 @@ export async function POST(req: NextRequest) {
           bodyHtml: html,
           metaDescription: meta,
           modelUsed: result.actualModel,
-          status: 'draft',
+          status: 'completed',
         },
       });
 

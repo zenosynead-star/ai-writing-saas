@@ -18,21 +18,30 @@ export default function Step4Options({
 }) {
   const [toneSample, setToneSample] = useState(state.toneSample);
   const [volumeSpec, setVolumeSpec] = useState(state.volumeSpec || '指定なし');
-  const [model, setModel] = useState<'low_cost' | 'balanced' | 'high_quality'>('balanced');
+  const [model, setModel] = useState<'low_cost' | 'balanced' | 'high_quality'>(state.modelChoice || 'balanced');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const saveAndNext = async () => {
+    setError(null);
     setLoading(true);
-    const res = await fetch(`/api/articles/${articleId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ toneSample, volumeSpec }),
-    });
-    setLoading(false);
-    if (res.ok) {
-      setState((s) => ({ ...s, toneSample, volumeSpec, modelChoice: model } as WizardState));
-      sessionStorage.setItem(`article-${articleId}-model`, model);
+    try {
+      const res = await fetch(`/api/articles/${articleId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toneSample, volumeSpec, modelChoice: model }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || '保存に失敗しました');
+        return;
+      }
+      setState((s) => ({ ...s, toneSample, volumeSpec, modelChoice: model }));
       onNext();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -111,6 +120,8 @@ export default function Step4Options({
         <div className="text-slate-600">キーワード: <span className="text-slate-900">{state.keywords.join('、')}</span></div>
         <div className="text-slate-600">見出し数: <span className="text-slate-900">{state.headings.length}件</span></div>
       </div>
+
+      {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded p-3">{error}</div>}
 
       <div className="flex justify-between gap-2 pt-4 border-t border-slate-200">
         <button onClick={onPrev} className="btn-secondary">← 戻る</button>

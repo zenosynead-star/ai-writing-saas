@@ -18,6 +18,7 @@ export interface WizardState {
   toneSample: string;
   volumeSpec: string;
   customInstruction: string;
+  modelChoice: 'low_cost' | 'balanced' | 'high_quality';
   headings: Array<{ id: string; level: number; text: string; parentId: string | null; order: number; bodyHtml: string | null }>;
   bodyHtml: string;
   metaDescription: string;

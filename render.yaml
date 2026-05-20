@@ -22,9 +22,5 @@ services:
         generateValue: true     # Renderが自動でランダム値生成
       - key: GOOGLE_API_KEY
         sync: false             # Render Dashboardで手動投入（AI Studioで発行）
-      - key: GEMINI_MODEL_HIGH
-        value: gemini-2.5-pro
-      - key: GEMINI_MODEL_BALANCED
-        value: gemini-2.5-flash
-      - key: GEMINI_MODEL_LOW
-        value: gemini-2.5-flash-lite
+      # GEMINI_MODEL_* は llm.ts のデフォルト (全て gemini-2.5-flash-lite) を採用するため
+      # ここでは env をセットしない。個別のモデルを使いたい場合は Render Dashboard で追加。

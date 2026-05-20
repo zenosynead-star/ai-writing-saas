@@ -137,9 +137,11 @@ model Article {
   toneSample   String?
   volumeSpec   String?  // 充実 / 指定なし / 簡潔
   customInstruction String?
+  modelChoice  String?  // low_cost / balanced / high_quality (Step4で選択、Step5で使用)
   bodyHtml     String?
   metaDescription String?
   modelUsed    String?
+  adviceJson   String?  // アドバイス機能の結果（要件5.6.3）
   totalCreditsUsed Int  @default(0)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt

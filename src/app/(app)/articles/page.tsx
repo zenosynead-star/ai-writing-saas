@@ -16,14 +16,14 @@ export default async function ArticlesPage() {
         <Link href="/articles/new" className="btn-primary">+ 新規記事作成</Link>
       </div>
 
-      <div className="card">
+      <div className="card overflow-x-auto">
         {articles.length === 0 ? (
           <div className="p-12 text-center text-slate-500">
             <p className="mb-4">まだ記事はありません。</p>
             <Link href="/articles/new" className="btn-primary">最初の記事を作成</Link>
           </div>
         ) : (
-          <table className="w-full text-sm">
+          <table className="w-full text-sm min-w-[600px]">
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
                 <th className="text-left px-4 py-3 font-medium text-slate-600">タイトル</th>
@@ -35,7 +35,7 @@ export default async function ArticlesPage() {
             <tbody className="divide-y divide-slate-100">
               {articles.map((a) => {
                 const keywords = JSON.parse(a.keywords || '[]') as string[];
-                const isCompleted = a.status === 'completed';
+                const isCompleted = !!a.bodyHtml;
                 const target = isCompleted ? `/articles/${a.id}` : `/articles/${a.id}/wizard`;
                 return (
                   <tr key={a.id} className="hover:bg-slate-50">
@@ -68,5 +68,5 @@ function StatusBadge({ status }: { status: string }) {
     failed: { label: '失敗', cls: 'bg-red-100 text-red-700' },
   };
   const m = map[status] ?? map.draft;
-  return <span className={`badge ${m.cls}`}>{m.label}</span>;
+  return <span className={`badge ${m.cls} whitespace-nowrap`}>{m.label}</span>;
 }
