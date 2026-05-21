@@ -25,13 +25,13 @@ const MODEL_MAP: Record<LogicalModel, string> = {
   low_cost: process.env.GEMINI_MODEL_LOW || 'gemini-2.5-flash-lite',
 };
 
-// 503/429 時のフォールバック先候補（全て無料tier 1500req/日 対応モデル）
-// gemini-2.0-flash は無料tier quota=0 のため除外（429ループの原因だった）
+// 503/429 時のフォールバック先候補
+// 注意: gemini-1.5-* は 2026年初頭にAPI v1betaで廃止 (404)
+//        gemini-2.0-flash は無料tier quota=0
+//        現状で安定動作するのは 2.5/2.0 の flash-lite のみ
 const FALLBACK_MODELS = [
   'gemini-2.5-flash-lite',
   'gemini-2.0-flash-lite',
-  'gemini-1.5-flash-8b',
-  'gemini-1.5-flash',
 ];
 
 let client: GoogleGenerativeAI | null = null;
@@ -182,6 +182,10 @@ class UpstreamError extends Error {
 
 function classifyError(err: unknown): UpstreamError {
   const msg = (err as Error).message || String(err);
+  // 404 / モデル廃止・未発見 - リトライ不要、別モデルへ即フォールバック
+  if (/404|not found|is not supported for generateContent/i.test(msg)) {
+    return new UpstreamError(404, false, msg);
+  }
   // 429 / Quota exceeded
   if (/429|quota|exceeded your current quota/i.test(msg)) {
     return new UpstreamError(429, false, msg);
@@ -251,8 +255,8 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
       } catch (err) {
         const upstream = classifyError(err);
         lastError = upstream;
-        if (upstream.statusCode === 429) {
-          // quota exhausted for this model — move on to fallback
+        if (upstream.statusCode === 429 || upstream.statusCode === 404) {
+          // quota exhausted or model deprecated — try next fallback model
           break;
         }
         if (!upstream.retryable) {
