@@ -25,8 +25,14 @@ const MODEL_MAP: Record<LogicalModel, string> = {
   low_cost: process.env.GEMINI_MODEL_LOW || 'gemini-2.5-flash-lite',
 };
 
-// 503/429 時のフォールバック先候補（順次試す）
-const FALLBACK_MODELS = ['gemini-2.5-flash-lite', 'gemini-2.0-flash-lite', 'gemini-2.0-flash'];
+// 503/429 時のフォールバック先候補（全て無料tier 1500req/日 対応モデル）
+// gemini-2.0-flash は無料tier quota=0 のため除外（429ループの原因だった）
+const FALLBACK_MODELS = [
+  'gemini-2.5-flash-lite',
+  'gemini-2.0-flash-lite',
+  'gemini-1.5-flash-8b',
+  'gemini-1.5-flash',
+];
 
 let client: GoogleGenerativeAI | null = null;
 function getClient(): GoogleGenerativeAI {
@@ -267,7 +273,13 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
 export function llmErrorToResponse(err: unknown): { status: number; body: { error: string } } {
   if (err instanceof UpstreamError) {
     if (err.statusCode === 429) {
-      return { status: 429, body: { error: 'AI APIの無料枠を使い切ったか、レート制限に達しました。しばらく待ってから再試行してください。' } };
+      return {
+        status: 429,
+        body: {
+          error:
+            'Gemini API のレート制限に達しました。1分後に再試行するか、無料枠の1日上限（1,500リクエスト/日）を超過している場合は、日本時間17時のリセットまでお待ちください。',
+        },
+      };
     }
     if (err.statusCode === 503 || err.statusCode === 504) {
       return { status: 503, body: { error: 'AI APIが現在混雑しています。10〜30秒待ってから再試行してください。' } };
