@@ -27,7 +27,7 @@ export async function POST(req: NextRequest) {
     }
 
     const result = await generate({
-      logicalModel: 'balanced',
+      logicalModel: 'low_cost', // flash-lite で安定動作（balanced は 429 が出やすい）
       taskType: 'advice',
       system: BASE_SYSTEM,
       user: ADVICE_PROMPT({ articleHtml: article.bodyHtml }),
