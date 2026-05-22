@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from 'react';
 import { sanitizeHtml } from '@/lib/sanitize';
+import { ProgressBar } from '@/components/ProgressBar';
 import type { WizardState } from '../Wizard';
 
 export default function Step5Body({
@@ -72,10 +73,24 @@ export default function Step5Body({
         </p>
       </div>
 
-      <div className="flex items-center gap-3">
-        <button onClick={generate} disabled={loading} className="btn-primary">
-          {loading ? '生成中…（30〜90秒）' : bodyHtml ? '本文再生成' : '本文を生成する'}
-        </button>
+      <div className="space-y-2">
+        <div className="flex items-center gap-3">
+          <button onClick={generate} disabled={loading} className="btn-primary">
+            {loading ? '生成中…' : bodyHtml ? '本文再生成' : '本文を生成する'}
+          </button>
+        </div>
+        {loading && (
+          <div className="bg-brand-50 border border-brand-200 rounded-lg p-4">
+            <ProgressBar
+              active={true}
+              estimateSec={state.modelChoice === 'high_quality' ? 70 : state.modelChoice === 'balanced' ? 50 : 35}
+              label="本文生成中(3000字以上のHTMLを生成しています)"
+            />
+            <div className="mt-2 text-xs text-slate-600">
+              長文生成のためページを閉じずにお待ちください。完了後に下にプレビューが表示されます。
+            </div>
+          </div>
+        )}
       </div>
 
       {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded p-3">{error}</div>}

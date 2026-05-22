@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { ProgressBar } from '@/components/ProgressBar';
 import type { WizardState } from '../Wizard';
 
 interface HeadingNode {
@@ -201,8 +202,9 @@ export default function Step3Headings({
           onChange={(e) => setCustomInstruction(e.target.value)}
         />
         <button onClick={generate} disabled={loading} className="btn-primary">
-          {loading ? '生成中…（10〜20秒）' : tree.length > 0 ? '見出し再生成' : 'AIで見出し生成'}
+          {loading ? '生成中…' : tree.length > 0 ? '見出し再生成' : 'AIで見出し生成'}
         </button>
+        {loading && <ProgressBar active={true} estimateSec={20} label="見出し構成生成中" />}
       </div>
 
       {(persona || searchIntent || latentNeeds.length > 0) && (

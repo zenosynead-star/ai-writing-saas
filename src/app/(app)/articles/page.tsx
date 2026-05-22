@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { getCurrentUser } from '@/lib/auth';
 import { prisma } from '@/lib/db';
+import DeleteArticleButton from './DeleteArticleButton';
 
 export default async function ArticlesPage() {
   const user = await getCurrentUser();
@@ -23,13 +24,14 @@ export default async function ArticlesPage() {
             <Link href="/articles/new" className="btn-primary">最初の記事を作成</Link>
           </div>
         ) : (
-          <table className="w-full text-sm min-w-[600px]">
+          <table className="w-full text-sm min-w-[640px]">
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
                 <th className="text-left px-4 py-3 font-medium text-slate-600">タイトル</th>
                 <th className="text-left px-4 py-3 font-medium text-slate-600">キーワード</th>
                 <th className="text-left px-4 py-3 font-medium text-slate-600">ステータス</th>
                 <th className="text-right px-4 py-3 font-medium text-slate-600">更新日</th>
+                <th className="text-right px-4 py-3 font-medium text-slate-600 w-20">操作</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -48,7 +50,10 @@ export default async function ArticlesPage() {
                     <td className="px-4 py-3">
                       <StatusBadge status={a.status} />
                     </td>
-                    <td className="px-4 py-3 text-right text-slate-500">{new Date(a.updatedAt).toLocaleDateString('ja-JP')}</td>
+                    <td className="px-4 py-3 text-right text-slate-500 whitespace-nowrap">{new Date(a.updatedAt).toLocaleDateString('ja-JP')}</td>
+                    <td className="px-4 py-3 text-right">
+                      <DeleteArticleButton articleId={a.id} title={a.title} />
+                    </td>
                   </tr>
                 );
               })}

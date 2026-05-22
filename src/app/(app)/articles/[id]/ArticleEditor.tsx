@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { sanitizeHtml } from '@/lib/sanitize';
+import { ProgressBar } from '@/components/ProgressBar';
 
 interface Advice {
   category: string;
@@ -59,16 +60,20 @@ export default function ArticleEditor({
   const [images, setImages] = useState<ArticleImageMeta[]>([]);
   const [featuredId, setFeaturedId] = useState<string | null>(null);
   const [imageGenLoading, setImageGenLoading] = useState(false);
+  const [imageProgress, setImageProgress] = useState<{ step: number; total: number; label: string }>({ step: 0, total: 0, label: '' });
 
   // WordPress
   const [wpConns, setWpConns] = useState<WpConnSummary[]>([]);
   const [wpPublishLoading, setWpPublishLoading] = useState(false);
   const [wpStatus, setWpStatus] = useState<'draft' | 'publish' | 'future'>('draft');
 
+  // h2 count (for bulk image generation)
+  const [h2Count, setH2Count] = useState(0);
+
   const wordCount = html.replace(/<[^>]+>/g, '').length;
   const safeHtml = useMemo(() => sanitizeHtml(html), [html]);
 
-  // 初回ロードで画像・WP接続を取得
+  // 初回ロードで画像・WP接続・h2数を取得
   useEffect(() => {
     fetch(`/api/generate/images?articleId=${articleId}`)
       .then((r) => r.json())
@@ -81,7 +86,10 @@ export default function ArticleEditor({
       .then((r) => r.json())
       .then((d) => setWpConns(d.connections || []))
       .catch(() => {});
-  }, [articleId]);
+    // count h2 from bodyHtml
+    const m = (initialHtml.match(/<h2\b/gi) || []).length;
+    setH2Count(m);
+  }, [articleId, initialHtml]);
 
   const save = async () => {
     setSaving(true);
@@ -104,33 +112,73 @@ export default function ArticleEditor({
     }
   };
 
+  /**
+   * 画像生成: 1枚ずつ API を呼んで進捗を細かく可視化する
+   */
   const generateImages = async (scope: 'all' | 'eyecatch' | 'h2') => {
     setImageGenLoading(true);
     setError(null);
     setInfo(null);
-    try {
-      const res = await fetch('/api/generate/images', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ articleId, scope }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || '画像生成に失敗しました');
-        return;
-      }
-      setInfo(`${data.generated.length} 枚生成${data.errors.length > 0 ? ` / ${data.errors.length} 件エラー` : ''}`);
-      // refresh images
-      const r2 = await fetch(`/api/generate/images?articleId=${articleId}`);
-      const d2 = await r2.json();
-      setImages(d2.images || []);
-      setFeaturedId(d2.featuredImageId || null);
-      setTab('images');
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setImageGenLoading(false);
+
+    // 生成タスクのリストを構築
+    const tasks: Array<{ label: string; body: Record<string, unknown> }> = [];
+    if (scope === 'all' || scope === 'eyecatch') {
+      tasks.push({ label: 'アイキャッチ', body: { articleId, scope: 'eyecatch' } });
     }
+    if (scope === 'all' || scope === 'h2') {
+      for (let i = 0; i < h2Count; i++) {
+        tasks.push({ label: `h2見出し #${i + 1}`, body: { articleId, scope: 'h2', h2Index: i } });
+      }
+    }
+
+    if (tasks.length === 0) {
+      setError('生成対象がありません(h2見出しを生成してから再度お試しください)');
+      setImageGenLoading(false);
+      return;
+    }
+
+    setImageProgress({ step: 0, total: tasks.length, label: tasks[0].label });
+
+    let successCount = 0;
+    const errorMsgs: string[] = [];
+    for (let i = 0; i < tasks.length; i++) {
+      setImageProgress({ step: i + 1, total: tasks.length, label: tasks[i].label });
+      try {
+        const res = await fetch('/api/generate/images', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(tasks[i].body),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          errorMsgs.push(`${tasks[i].label}: ${data.error || `HTTP ${res.status}`}`);
+        } else if (data.errors && data.errors.length > 0) {
+          errorMsgs.push(`${tasks[i].label}: ${data.errors[0].error?.slice(0, 80)}`);
+        } else {
+          successCount++;
+        }
+      } catch (err) {
+        errorMsgs.push(`${tasks[i].label}: ${(err as Error).message}`);
+      }
+      // 各リクエスト後に画像一覧をリフレッシュ
+      try {
+        const r = await fetch(`/api/generate/images?articleId=${articleId}`);
+        const d = await r.json();
+        setImages(d.images || []);
+        setFeaturedId(d.featuredImageId || null);
+      } catch {}
+    }
+
+    setImageGenLoading(false);
+    setImageProgress({ step: 0, total: 0, label: '' });
+
+    if (errorMsgs.length > 0) {
+      setError(`${errorMsgs.length} 件失敗: ${errorMsgs.slice(0, 2).join(' / ')}`);
+    }
+    if (successCount > 0) {
+      setInfo(`✅ ${successCount} 枚生成完了`);
+    }
+    setTab('images');
   };
 
   const generateAdvice = async () => {
@@ -287,6 +335,7 @@ export default function ArticleEditor({
               {adviceLoading ? '生成中…' : advice.length > 0 ? '再生成' : 'アドバイス生成'}
             </button>
           </div>
+          {adviceLoading && <ProgressBar active={true} estimateSec={10} label="アドバイス生成中" />}
           {advice.length > 0 ? (
             <ul className="space-y-2">
               {advice.map((a, i) => (
@@ -296,7 +345,7 @@ export default function ArticleEditor({
                 </li>
               ))}
             </ul>
-          ) : (
+          ) : !adviceLoading && (
             <p className="text-sm text-slate-500 text-center py-8">ボタンを押して提案を生成</p>
           )}
         </div>
@@ -306,8 +355,11 @@ export default function ArticleEditor({
         <div className="card p-6 space-y-4">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div>
-              <h2 className="font-bold">画像生成（Gemini Nano Banana）</h2>
-              <p className="text-xs text-slate-500 mt-1">アイキャッチ + h2見出し画像を自動生成。1枚 20〜30秒</p>
+              <h2 className="font-bold">画像生成（Pollinations.ai / Flux）</h2>
+              <p className="text-xs text-slate-500 mt-1">
+                アイキャッチ + h2見出し画像を自動生成。1枚あたり 20〜60秒、混雑時は最大2分。
+                {h2Count > 0 && ` h2見出し数: ${h2Count}`}
+              </p>
             </div>
             <div className="flex gap-2">
               <button onClick={() => generateImages('all')} disabled={imageGenLoading} className="btn-primary text-sm">
@@ -316,11 +368,26 @@ export default function ArticleEditor({
               <button onClick={() => generateImages('eyecatch')} disabled={imageGenLoading} className="btn-secondary text-sm">
                 アイキャッチのみ
               </button>
-              <button onClick={() => generateImages('h2')} disabled={imageGenLoading} className="btn-secondary text-sm">
+              <button onClick={() => generateImages('h2')} disabled={imageGenLoading || h2Count === 0} className="btn-secondary text-sm">
                 h2のみ
               </button>
             </div>
           </div>
+
+          {imageGenLoading && imageProgress.total > 0 && (
+            <div className="bg-brand-50 border border-brand-200 rounded-lg p-4">
+              <ProgressBar
+                active={true}
+                estimateSec={45}
+                label={`画像生成中: ${imageProgress.label}`}
+                step={imageProgress.step}
+                total={imageProgress.total}
+              />
+              <div className="mt-2 text-xs text-slate-600">
+                残り {imageProgress.total - imageProgress.step + 1} 枚 / 推定残り時間 約 {Math.max(0, (imageProgress.total - imageProgress.step + 1) * 45)}秒
+              </div>
+            </div>
+          )}
 
           {eyecatchImg && (
             <div>
@@ -384,8 +451,15 @@ export default function ArticleEditor({
                 </div>
               </div>
               <button onClick={publishToWp} disabled={wpPublishLoading} className="btn-primary">
-                {wpPublishLoading ? '投稿中…(画像アップロードに時間がかかります)' : 'WordPress に投稿'}
+                {wpPublishLoading ? '投稿中…' : 'WordPress に投稿'}
               </button>
+              {wpPublishLoading && (
+                <ProgressBar
+                  active={true}
+                  estimateSec={images.length * 5 + 10}
+                  label={`WordPress に投稿中(画像${images.length}枚アップロード+本文投稿)`}
+                />
+              )}
             </>
           )}
         </div>

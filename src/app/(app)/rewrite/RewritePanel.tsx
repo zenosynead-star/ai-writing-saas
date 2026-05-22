@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { ProgressBar } from '@/components/ProgressBar';
 
 interface AnalyzeResult {
   url: string;
@@ -237,8 +238,26 @@ export default function RewritePanel() {
             disabled={generating}
             className="btn-primary w-full py-3"
           >
-            {generating ? 'リライト生成中…（30〜90秒）' : 'リライトを生成する'}
+            {generating ? 'リライト生成中…' : 'リライトを生成する'}
           </button>
+          {generating && (
+            <div className="bg-brand-50 border border-brand-200 rounded-lg p-4">
+              <ProgressBar
+                active={true}
+                estimateSec={model === 'high_quality' ? 70 : model === 'balanced' ? 50 : 35}
+                label="リライト生成中(URL取得→解析→AI再生成)"
+              />
+              <div className="mt-2 text-xs text-slate-600">
+                完了後に新規記事として自動で保存され、編集画面に遷移します。
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {analyzing && (
+        <div className="bg-brand-50 border border-brand-200 rounded-lg p-4">
+          <ProgressBar active={true} estimateSec={8} label="ページを取得・解析中" />
         </div>
       )}
     </div>

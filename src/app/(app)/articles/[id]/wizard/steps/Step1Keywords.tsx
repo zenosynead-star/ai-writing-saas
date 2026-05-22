@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { ProgressBar } from '@/components/ProgressBar';
 import type { WizardState } from '../Wizard';
 
 type Mode = 'direct' | 'theme';
@@ -133,6 +134,11 @@ export default function Step1Keywords({
               </button>
             </div>
             <div className="text-xs text-slate-500 mt-1">SEO観点で20件提案します。クリックして最大5件を選択。</div>
+            {loading && (
+              <div className="mt-2">
+                <ProgressBar active={true} estimateSec={15} label="キーワード生成中" />
+              </div>
+            )}
           </div>
 
           {suggestions.length > 0 && (

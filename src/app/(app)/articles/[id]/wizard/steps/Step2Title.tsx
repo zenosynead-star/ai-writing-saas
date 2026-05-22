@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { ProgressBar } from '@/components/ProgressBar';
 import type { WizardState } from '../Wizard';
 
 interface TitleSuggestion {
@@ -89,11 +90,14 @@ export default function Step2Title({
         </p>
       </div>
 
-      <div className="flex items-center gap-3">
-        <button onClick={generate} disabled={loading} className="btn-primary">
-          {loading ? '生成中…' : suggestions.length > 0 ? 'タイトル再生成' : 'AIでタイトル生成'}
-        </button>
-        <span className="text-xs text-slate-500">4つの訴求軸でタイトル案を生成します</span>
+      <div className="space-y-2">
+        <div className="flex items-center gap-3">
+          <button onClick={generate} disabled={loading} className="btn-primary">
+            {loading ? '生成中…' : suggestions.length > 0 ? 'タイトル再生成' : 'AIでタイトル生成'}
+          </button>
+          <span className="text-xs text-slate-500">4つの訴求軸でタイトル案を生成します</span>
+        </div>
+        {loading && <ProgressBar active={true} estimateSec={10} label="タイトル生成中" />}
       </div>
 
       {suggestions.length > 0 && (
