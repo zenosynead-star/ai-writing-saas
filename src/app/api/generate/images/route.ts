@@ -90,7 +90,9 @@ export async function POST(req: NextRequest) {
           errors.push({ kind: 'h2', h2Index: idx, error: (e as Error).message });
         }
         // RPM 制限対策で500ms 間隔
-        await new Promise((r) => setTimeout(r, 500));
+        // Pollinations.ai は同一IPからの並列リクエストを1つに制限 (queue: max 1)
+        // 各リクエスト完了後に 4秒空けて確実にキュー解放を待つ
+        await new Promise((r) => setTimeout(r, 4000));
       }
     }
 

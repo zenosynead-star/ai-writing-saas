@@ -41,7 +41,7 @@ function aspectToWH(aspect: string): { w: number; h: number } {
   }
 }
 
-async function generateWithPollinations(opts: GenerateImageOptions): Promise<GenerateImageResult> {
+async function callPollinationsOnce(opts: GenerateImageOptions): Promise<GenerateImageResult> {
   const { w, h } = aspectToWH(opts.aspectRatio || '16:9');
   const model = opts.pollModel || 'flux';
   const params = new URLSearchParams({
@@ -55,7 +55,7 @@ async function generateWithPollinations(opts: GenerateImageOptions): Promise<Gen
 
   const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(opts.prompt)}?${params.toString()}`;
   const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), 90_000);
+  const timer = setTimeout(() => ac.abort(), 120_000);
   try {
     const resp = await fetch(url, { signal: ac.signal });
     if (!resp.ok) {
@@ -75,11 +75,30 @@ async function generateWithPollinations(opts: GenerateImageOptions): Promise<Gen
   } catch (err) {
     if (err instanceof ImageGenError) throw err;
     const e = err as Error;
-    if (e.name === 'AbortError') throw new ImageGenError(408, 'Pollinations API がタイムアウトしました（90秒）');
+    if (e.name === 'AbortError') throw new ImageGenError(408, 'Pollinations API がタイムアウトしました（120秒）');
     throw new ImageGenError(500, e.message);
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function generateWithPollinations(opts: GenerateImageOptions): Promise<GenerateImageResult> {
+  // Queue full (402) や混雑による timeout は待ってリトライ
+  let lastErr: ImageGenError | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await callPollinationsOnce(opts);
+    } catch (e) {
+      const err = e as ImageGenError;
+      lastErr = err;
+      const retryable = err.statusCode === 402 || err.statusCode === 408 || err.statusCode === 429 || err.statusCode === 500 || err.statusCode === 502 || err.statusCode === 503;
+      if (!retryable || attempt === 2) break;
+      // 402 (queue full) は長めに、それ以外は短めに
+      const wait = err.statusCode === 402 ? 8000 + attempt * 4000 : 3000 + attempt * 2000;
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+  throw lastErr ?? new ImageGenError(500, 'Pollinations: unknown');
 }
 
 // 互換のため残す: 将来 Gemini Image に課金後切り替え可能
