@@ -146,10 +146,15 @@ model Article {
   sourceUrl    String?  // リライト元のURL
   originalBodyHtml String? // リライト元の本文HTML（差分表示用）
   rewriteMode  String?  // structure_preserve / restructure / partial
+  // 画像生成・WordPress連携（要件6章・2.2）
+  featuredImageId String?  // ArticleImage.id (アイキャッチ)
+  wpPostId     Int?     // WordPressに投稿後のPost ID
+  wpPostStatus String?  // draft / publish / future
   totalCreditsUsed Int  @default(0)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   headings     ArticleHeading[]
+  articleImages ArticleImage[]
 
   @@index([userId, createdAt])
 }
@@ -180,6 +185,37 @@ model GeneratedImage {
   url        String?
   model      String?
   createdAt  DateTime @default(now())
+
+  @@index([userId])
+}
+
+// 記事に紐づく画像（要件6章: アイキャッチ・h2見出し画像）
+model ArticleImage {
+  id         String   @id @default(cuid())
+  articleId  String
+  article    Article  @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  kind       String   // 'eyecatch' | 'h2'
+  h2Index    Int?     // h2の何番目か (0始まり) (kind='h2'の時)
+  mimeType   String   @default("image/png")
+  dataBase64 String   // 画像のbase64
+  prompt     String
+  modelUsed  String?
+  createdAt  DateTime @default(now())
+
+  @@index([articleId])
+}
+
+// WordPress 連携設定（要件2.2: 記事の自動投稿）
+model WpConnection {
+  id            String   @id @default(cuid())
+  userId        String
+  siteUrl       String   // https://blog.example.com
+  username      String
+  appPassword   String   // Application Password
+  defaultStatus String   @default("draft")  // draft / publish / future
+  isDefault     Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   @@index([userId])
 }

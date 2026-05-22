@@ -19,6 +19,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               <Link href="/articles/new" className="px-3 py-1.5 rounded hover:bg-slate-100 text-slate-700">記事作成</Link>
               <Link href="/rewrite" className="px-3 py-1.5 rounded hover:bg-slate-100 text-slate-700">リライト</Link>
               <Link href="/sites" className="px-3 py-1.5 rounded hover:bg-slate-100 text-slate-700">サイト管理</Link>
+              <Link href="/settings/wordpress" className="px-3 py-1.5 rounded hover:bg-slate-100 text-slate-700">WP連携</Link>
             </nav>
           </div>
           <MobileNav />
