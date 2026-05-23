@@ -34,16 +34,31 @@ const FALLBACK_MODELS = [
   'gemini-2.0-flash-lite',
 ];
 
-let client: GoogleGenerativeAI | null = null;
-function getClient(): GoogleGenerativeAI {
-  if (!client) {
-    const apiKey = process.env.GOOGLE_API_KEY;
-    if (!apiKey) {
-      throw new Error('GOOGLE_API_KEY is not configured. Set it in .env (https://aistudio.google.com/ で発行)');
-    }
-    client = new GoogleGenerativeAI(apiKey);
+/**
+ * 複数のAPIキーをサポート。
+ * GOOGLE_API_KEY, GOOGLE_API_KEY_2, GOOGLE_API_KEY_3 ... をすべて拾う。
+ * ローテーション + 429/503 自動切替で実質 quota を増やす。
+ */
+function getApiKeys(): string[] {
+  const keys: string[] = [];
+  // primary
+  if (process.env.GOOGLE_API_KEY) keys.push(process.env.GOOGLE_API_KEY);
+  // additional: GOOGLE_API_KEY_2, _3, ... 検索
+  for (let i = 2; i <= 9; i++) {
+    const k = process.env[`GOOGLE_API_KEY_${i}`];
+    if (k) keys.push(k);
   }
-  return client;
+  return keys;
+}
+
+const clientCache = new Map<string, GoogleGenerativeAI>();
+function getClient(apiKey: string): GoogleGenerativeAI {
+  let c = clientCache.get(apiKey);
+  if (!c) {
+    c = new GoogleGenerativeAI(apiKey);
+    clientCache.set(apiKey, c);
+  }
+  return c;
 }
 
 export interface GenerateOptions {
@@ -211,9 +226,10 @@ async function sleep(ms: number) {
 
 async function callModelOnce(
   modelName: string,
+  apiKey: string,
   opts: GenerateOptions,
 ): Promise<GenerateResult> {
-  const c = getClient();
+  const c = getClient(apiKey);
   const generationConfig: GenerationConfig = {
     maxOutputTokens: opts.maxTokens ?? 4096,
     temperature: opts.temperature ?? 0.7,
@@ -239,32 +255,55 @@ async function callModelOnce(
   };
 }
 
+// プロセス起動以降のキー使用カウンタ。ローテーション開始位置として使う。
+let keyRotationCounter = 0;
+
 /**
- * Robust generate(): exponential backoff for 503/500, fallback to other models on 429.
+ * Robust generate():
+ *  - 複数の API キーをラウンドロビン
+ *  - 各キーで model フォールバックチェーンを試す
+ *  - 429 / 404 はリトライ不要で次のキー or モデルへ
+ *  - 503 / 500 / timeout は exp backoff でリトライ
  */
 export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
   const requested = MODEL_MAP[opts.logicalModel ?? 'balanced'];
   const tryOrder = [requested, ...FALLBACK_MODELS.filter((m) => m !== requested)];
 
+  const allKeys = getApiKeys();
+  if (allKeys.length === 0) {
+    throw new UpstreamError(500, false, 'GOOGLE_API_KEY が設定されていません');
+  }
+
+  // ローテーション: 開始位置をずらして負荷分散
+  const startIndex = keyRotationCounter % allKeys.length;
+  keyRotationCounter++;
+  const keys = [...allKeys.slice(startIndex), ...allKeys.slice(0, startIndex)];
+
   let lastError: UpstreamError | null = null;
-  for (const modelName of tryOrder) {
-    // up to 3 attempts per model with exp backoff
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        return await callModelOnce(modelName, opts);
-      } catch (err) {
-        const upstream = classifyError(err);
-        lastError = upstream;
-        if (upstream.statusCode === 429 || upstream.statusCode === 404) {
-          // quota exhausted or model deprecated — try next fallback model
-          break;
+  for (const apiKey of keys) {
+    for (const modelName of tryOrder) {
+      // 各キー×モデルで最大3回 exp backoff
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          return await callModelOnce(modelName, apiKey, opts);
+        } catch (err) {
+          const upstream = classifyError(err);
+          lastError = upstream;
+          if (upstream.statusCode === 429) {
+            // このキーのquota枯渇 → 次のキー/モデルへ即時切替
+            break;
+          }
+          if (upstream.statusCode === 404) {
+            // モデル廃止 → 次のモデルへ
+            break;
+          }
+          if (!upstream.retryable) {
+            throw upstream;
+          }
+          // 503/500/timeout の場合、同じキー+モデルで exp backoff
+          const wait = 1000 * Math.pow(2, attempt); // 1s, 2s, 4s
+          await sleep(wait);
         }
-        if (!upstream.retryable) {
-          // non-retryable error → bail
-          throw upstream;
-        }
-        const wait = 1000 * Math.pow(2, attempt); // 1s, 2s, 4s
-        await sleep(wait);
       }
     }
   }
