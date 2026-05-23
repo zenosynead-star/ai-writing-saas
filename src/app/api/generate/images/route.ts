@@ -1,12 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth';
 import { prisma } from '@/lib/db';
-import { generateImage, buildEyecatchPrompt, buildH2Prompt, ImageGenError } from '@/lib/imageGen';
+import {
+  generateImage,
+  buildEyecatchPrompt,
+  buildH2Prompt,
+  buildOptimizedImagePrompts,
+  ImageGenError,
+} from '@/lib/imageGen';
+import { embedH2Images, countH2 } from '@/lib/imageEmbed';
 import { z } from 'zod';
 
 const Schema = z.object({
   articleId: z.string(),
-  /** 'all' = アイキャッチ + 全 h2 / 'eyecatch' / 'h2' */
   scope: z.enum(['all', 'eyecatch', 'h2']).default('all'),
   /** scope='h2' のとき、特定の h2 だけ生成する場合の index */
   h2Index: z.number().optional(),
@@ -34,13 +40,40 @@ export async function POST(req: NextRequest) {
     const generated: Array<{ id: string; kind: string; h2Index: number | null }> = [];
     const errors: Array<{ kind: string; h2Index?: number; error: string }> = [];
 
+    // 本文から h2 を抽出（headings テーブルが無い場合のフォールバック）
+    const h2TextsFromBody: string[] = [];
+    if (article.bodyHtml) {
+      const re = /<h2\b[^>]*>([\s\S]*?)<\/h2>/gi;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(article.bodyHtml)) !== null) {
+        h2TextsFromBody.push((m[1] || '').replace(/<[^>]+>/g, '').trim());
+      }
+    }
+    const allH2Texts = h2TextsFromBody.length > 0 ? h2TextsFromBody : article.headings.map((h) => h.text);
+
+    // 単独 h2 指定 or 個別 eyecatch リクエストの場合はAI最適化プロンプト生成をスキップ（高速化）
+    const useOptimized = !(scope === 'h2' && h2Index !== undefined) && allH2Texts.length > 0;
+    let prompts: { eyecatch: string; h2: string[] };
+    if (useOptimized && (scope === 'all' || (scope === 'h2' && h2Index === undefined))) {
+      // 全体生成時はAIで最適化
+      prompts = await buildOptimizedImagePrompts({
+        title: article.title,
+        keywords,
+        h2Texts: allH2Texts,
+      });
+    } else {
+      // フォールバック: テンプレート
+      prompts = {
+        eyecatch: buildEyecatchPrompt({ title: article.title, keywords }),
+        h2: allH2Texts.map((t) => buildH2Prompt({ h2Text: t, articleTitle: article.title })),
+      };
+    }
+
     // アイキャッチ
     if (scope === 'all' || scope === 'eyecatch') {
       try {
-        // 既存の eyecatch があれば削除
         await prisma.articleImage.deleteMany({ where: { articleId, kind: 'eyecatch' } });
-        const prompt = buildEyecatchPrompt({ title: article.title, keywords });
-        const img = await generateImage({ prompt, aspectRatio: '16:9' });
+        const img = await generateImage({ prompt: prompts.eyecatch, aspectRatio: '16:9' });
         const saved = await prisma.articleImage.create({
           data: {
             articleId,
@@ -48,7 +81,7 @@ export async function POST(req: NextRequest) {
             h2Index: null,
             mimeType: img.mimeType,
             dataBase64: img.base64,
-            prompt,
+            prompt: prompts.eyecatch,
             modelUsed: img.modelUsed,
           },
         });
@@ -64,15 +97,15 @@ export async function POST(req: NextRequest) {
 
     // h2 見出し画像
     if (scope === 'all' || scope === 'h2') {
-      const targets = h2Index !== undefined
-        ? article.headings.slice(h2Index, h2Index + 1)
-        : article.headings;
-      for (let i = 0; i < targets.length; i++) {
-        const idx = h2Index !== undefined ? h2Index : i;
-        const h = targets[i];
+      const targetIndexes = h2Index !== undefined
+        ? [h2Index]
+        : allH2Texts.map((_, i) => i);
+
+      for (const idx of targetIndexes) {
+        if (idx < 0 || idx >= allH2Texts.length) continue;
         try {
           await prisma.articleImage.deleteMany({ where: { articleId, kind: 'h2', h2Index: idx } });
-          const prompt = buildH2Prompt({ h2Text: h.text, articleTitle: article.title });
+          const prompt = prompts.h2[idx] || buildH2Prompt({ h2Text: allH2Texts[idx], articleTitle: article.title });
           const img = await generateImage({ prompt, aspectRatio: '16:9' });
           const saved = await prisma.articleImage.create({
             data: {
@@ -89,14 +122,38 @@ export async function POST(req: NextRequest) {
         } catch (e) {
           errors.push({ kind: 'h2', h2Index: idx, error: (e as Error).message });
         }
-        // RPM 制限対策で500ms 間隔
-        // Pollinations.ai は同一IPからの並列リクエストを1つに制限 (queue: max 1)
-        // 各リクエスト完了後に 4秒空けて確実にキュー解放を待つ
-        await new Promise((r) => setTimeout(r, 4000));
+        // Pollinations の同一IP並列制限対策(4秒間隔)
+        if (targetIndexes.length > 1) {
+          await new Promise((r) => setTimeout(r, 4000));
+        }
       }
     }
 
-    return NextResponse.json({ generated, errors });
+    // 本文HTMLに h2 画像を自動挿入
+    let embedNote: string | undefined;
+    if (article.bodyHtml && countH2(article.bodyHtml) > 0) {
+      const allH2Images = await prisma.articleImage.findMany({
+        where: { articleId, kind: 'h2' },
+        orderBy: { h2Index: 'asc' },
+      });
+      if (allH2Images.length > 0) {
+        const refs = allH2Images.map((i) => ({
+          id: i.id,
+          h2Index: i.h2Index ?? 0,
+          alt: allH2Texts[i.h2Index ?? 0],
+        }));
+        const newBody = embedH2Images(article.bodyHtml, refs);
+        if (newBody !== article.bodyHtml) {
+          await prisma.article.update({
+            where: { id: articleId },
+            data: { bodyHtml: newBody },
+          });
+          embedNote = `${refs.length}枚を本文に挿入`;
+        }
+      }
+    }
+
+    return NextResponse.json({ generated, errors, embedNote });
   } catch (err) {
     if (err instanceof ImageGenError) {
       return NextResponse.json({ error: err.message }, { status: err.statusCode });

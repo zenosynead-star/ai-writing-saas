@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth';
 import { prisma } from '@/lib/db';
 import { uploadMedia, createPost, setMediaAltText, WpError, type WpCredentials } from '@/lib/wordpress';
+import { stripExistingH2Images } from '@/lib/imageEmbed';
 import { z } from 'zod';
 
 const Schema = z.object({
@@ -59,36 +60,37 @@ export async function POST(req: NextRequest) {
       }
 
       // h2 画像をアップロードして本文に挿入
+      // bodyHtmlには既に /api/images/{id} を指す<figure>が埋め込まれている可能性があるので、
+      // 一度全部削除してから WP のメディアURLで挿入し直す
+      bodyHtml = stripExistingH2Images(bodyHtml);
+
       const h2Imgs = article.articleImages
         .filter((i) => i.kind === 'h2' && typeof i.h2Index === 'number')
         .sort((a, b) => (a.h2Index ?? 0) - (b.h2Index ?? 0));
       if (h2Imgs.length > 0) {
-        const h2Pattern = /<h2[^>]*>([\s\S]*?)<\/h2>/gi;
+        // h2 ごとに事前にメディアアップロード(直列、Pollinations 同様WPサーバの並列負荷も考慮)
+        const uploadedByH2Index = new Map<number, { url: string; alt: string }>();
+        for (const img of h2Imgs) {
+          const idx = img.h2Index ?? 0;
+          const altText = `${article.title} - セクション${idx + 1}`;
+          const uploaded = await uploadMedia(creds, {
+            filename: `h2-${article.id}-${idx}.${(img.mimeType.split('/')[1] || 'jpg').replace('jpeg', 'jpg')}`,
+            mimeType: img.mimeType,
+            dataBase64: img.dataBase64,
+            altText,
+          });
+          uploadedByH2Index.set(idx, { url: uploaded.sourceUrl, alt: altText });
+        }
+
+        // h2 タグの直後に WP用 <figure> を挿入
         let h2Idx = 0;
-        const replacements: Array<{ matchIndex: number; imageUrl: string; alt: string }> = [];
-        let m: RegExpExecArray | null;
-        while ((m = h2Pattern.exec(bodyHtml)) !== null) {
-          const img = h2Imgs.find((x) => x.h2Index === h2Idx);
-          if (img) {
-            const uploaded = await uploadMedia(creds, {
-              filename: `h2-${article.id}-${h2Idx}.png`,
-              mimeType: img.mimeType,
-              dataBase64: img.dataBase64,
-              altText: (m[1] || '').replace(/<[^>]+>/g, '').trim(),
-            });
-            replacements.push({ matchIndex: m.index, imageUrl: uploaded.sourceUrl, alt: (m[1] || '').replace(/<[^>]+>/g, '').trim() });
-          }
+        bodyHtml = bodyHtml.replace(/(<h2\b[^>]*>([\s\S]*?)<\/h2>)/gi, (match, _full, inner) => {
+          const up = uploadedByH2Index.get(h2Idx);
           h2Idx++;
-        }
-        // 後ろから挿入（インデックスがずれないように）
-        for (let i = replacements.length - 1; i >= 0; i--) {
-          const r = replacements[i];
-          const imgTag = `<figure class="wp-block-image size-large"><img src="${r.imageUrl}" alt="${r.alt}" /></figure>\n`;
-          bodyHtml = bodyHtml.slice(0, r.matchIndex) + imgTag + bodyHtml.slice(r.matchIndex);
-        }
-      } else {
-        // 既存の data: URL や /api/images/{id} を含む img タグはそのまま渡すと WP では表示されない可能性。
-        // ここでは単純化してbodyHtmlをそのまま投稿
+          if (!up) return match;
+          const safeAlt = (inner as string).replace(/<[^>]+>/g, '').trim() || up.alt;
+          return `${match}\n<figure class="wp-block-image size-large"><img src="${up.url}" alt="${safeAlt.replace(/"/g, '&quot;')}" /></figure>\n`;
+        });
       }
     }
 
