@@ -262,7 +262,7 @@ Generate optimized image specifications for **Imagen 4**, in this EXACT visual s
 - **16:9 horizontal blog header**
 - **Composition**: 1 standing character on the LEFT, 1 sitting (or different pose) character on the RIGHT. Both are friendly Japanese characters appropriate to the article topic.
 - **Decorative houseplants (potted plants / foliage)** on both sides of the canvas (e.g. a monstera in a pot left foreground, hanging plant right corner)
-- **Center area = LARGE EMPTY ROUNDED WHITE CARD** (sized about 60% width × 36% height of the canvas, centered). This box will hold the title — leave it COMPLETELY EMPTY (no text inside, just a clean white rectangle with a thin dark border).
+- **Center area = LARGE EMPTY ROUNDED WHITE CARD** (medium-large size, centered horizontally and vertically). This box will hold the title — leave it COMPLETELY EMPTY (no text inside, just a clean white rectangle with a thin dark border).
 - **Background**: pastel sky-blue / cream / mint / pale yellow gradient or simple shapes. Cheerful, modern.
 - **Clean thin outlines**, flat fill colors, no heavy shadows
 - A pastel base palette + ONE bright accent (sunny yellow / coral pink / mint green)
@@ -290,7 +290,7 @@ Describe HOW to compose those elements: who is where, what they're doing, left/r
 **Stage C — Final Imagen prompt (English, 150-220 words):**
 Write the actual prompt for Imagen 4. It MUST:
 - Begin with "Pastel-toned flat illustration, Japanese blog header, 16:9 landscape."
-- Mention "Center 60% width × 36% height: a clean empty rounded WHITE CARD with thin dark border — leave COMPLETELY EMPTY (NO TEXT INSIDE), reserved for a post-processing title overlay."
+- Mention "Center area: a clean empty rounded WHITE CARD (medium-large size) with thin dark border, occupying the central portion of the canvas — leave COMPLETELY EMPTY (NO TEXT INSIDE), reserved for a post-processing title overlay."
 - Describe the surrounding scene: standing character on LEFT (describe their pose, outfit, what they hold), sitting/different-pose character on RIGHT (describe pose, what they hold/do), decorative POTTED PLANTS / HOUSEPLANTS on both side foreground/corner
 - **EXPLICITLY name every concreteElement from Stage A** somewhere in the prompt (as scene objects, prop labels, or speech-bubble content around — NOT inside — the center card)
 - Optionally add 2-4 small speech bubbles or product tags AROUND the characters (left margin or right margin, NOT in the center area) with their **exact Japanese label text** in quotes like "small speech bubble saying 「TSAロック」"
@@ -308,7 +308,7 @@ Write the actual prompt for Imagen 4. It MUST:
     {
       "concreteElements": ["...", "...", "...", "...", "..."],
       "visualPlan": "...",
-      "prompt": "Pastel-toned flat illustration, Japanese blog header, 16:9 landscape. Center 60% × 36%: clean empty rounded WHITE CARD with thin dark border — COMPLETELY EMPTY, no text. LEFT: standing character ... RIGHT: sitting/different-pose character ... Potted plants on both sides. Speech bubbles in margins saying \\"...\\", \\"...\\", \\"...\\", \\"...\\". [Naming every concreteElement]. Pastel background, [accent] highlights, clean thin outlines, flat fill colors."
+      "prompt": "Pastel-toned flat illustration, Japanese blog header, 16:9 landscape. Center area: clean empty rounded WHITE CARD (medium-large size) with thin dark border — COMPLETELY EMPTY, no text. LEFT: standing character ... RIGHT: sitting/different-pose character ... Potted plants on both sides. Speech bubbles in margins saying \\"...\\", \\"...\\", \\"...\\", \\"...\\". [Naming every concreteElement]. Pastel background, [accent] highlights, clean thin outlines, flat fill colors."
     }
   ]
 }`;
@@ -456,7 +456,7 @@ export function buildH2Prompt(opts: {
   articleTitle: string;
 }): string {
   if (isVertexProvider()) {
-    return `Pastel-toned flat illustration, Japanese blog section header, 16:9 landscape (article: "${opts.articleTitle}"). Center 60% × 36%: clean empty rounded WHITE CARD with thin dark border — COMPLETELY EMPTY, no text. LEFT: standing young Japanese character relevant to section topic "${opts.h2Text}". RIGHT: sitting or different-pose young Japanese character also relevant. Decorative potted plants / houseplants on both sides. 2-4 small speech bubbles in margins with SHORT Japanese labels (3-8 chars each) derived from "${opts.h2Text}". Pastel sky-blue/cream background with one bright accent color, clean thin outlines, flat fill colors, bright and friendly. NO text inside the center card, NO large headlines anywhere.`;
+    return `Pastel-toned flat illustration, Japanese blog section header, 16:9 landscape (article: "${opts.articleTitle}"). Center area: clean empty rounded WHITE CARD (medium-large size) with thin dark border — COMPLETELY EMPTY, no text. LEFT: standing young Japanese character relevant to section topic "${opts.h2Text}". RIGHT: sitting or different-pose young Japanese character also relevant. Decorative potted plants / houseplants on both sides. 2-4 small speech bubbles in margins with SHORT Japanese labels (3-8 chars each) derived from "${opts.h2Text}". Pastel sky-blue/cream background with one bright accent color, clean thin outlines, flat fill colors, bright and friendly. NO text inside the center card, NO large headlines anywhere.`;
   }
   // フォトリアル(Pollinations)版フォールバック
   return `Hyper-realistic editorial photograph illustrating the topic: "${opts.h2Text}" (from a Japanese blog article about "${opts.articleTitle}"). Cinematic lighting, vibrant colors, sharp focus, shallow depth of field. Concrete photographic scene with real people, objects, or environments related to the topic. Premium magazine quality, 8k resolution. Engaging and visually intriguing composition. NO TEXT, NO LETTERS, NO WATERMARKS. 16:9 horizontal landscape.`;
