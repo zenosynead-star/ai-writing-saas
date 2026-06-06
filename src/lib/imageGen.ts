@@ -183,11 +183,27 @@ export async function generateImage(opts: GenerateImageOptions): Promise<Generat
 
 /**
  * h2 セクションの情報。
- * `body` には h2 直下の本文プレーンテキスト(最大 ~600 文字)を入れる。
+ * `body` には h2 直下の本文プレーンテキスト(最大 ~1200 文字)を入れる。
  */
 export interface H2Section {
   text: string;
   body?: string;
+}
+
+/**
+ * 本文を「固有名詞・数値・固有概念」が密になるよう凝縮する。
+ * 装飾的なフィラー(括弧書きの読み仮名・「〜は…です」助詞句・括弧書きの例示等)を除去。
+ */
+function condenseBody(body: string, maxLen: number): string {
+  return body
+    // 括弧書きの注釈/例示(30字以内)を削除
+    .replace(/[（(][^）)]{1,30}[）)]/g, '')
+    // 「以下」「次のような」等の接続フィラー
+    .replace(/(?:以下のような|次のような|これは|これらの|そして|また、|さらに、|なお、)/g, '')
+    // 連続する空白・全角空白を1つに
+    .replace(/[\s　]+/g, ' ')
+    .trim()
+    .slice(0, maxLen);
 }
 
 /**
@@ -215,10 +231,10 @@ export async function buildOptimizedImagePrompts(opts: {
   const inputData = {
     title: sanitizeUserInput(opts.title),
     keywords: opts.keywords.map(sanitizeUserInput),
-    leadBody: opts.leadBody ? sanitizeUserInput(opts.leadBody).slice(0, 800) : '',
+    leadBody: opts.leadBody ? condenseBody(sanitizeUserInput(opts.leadBody), 1400) : '',
     sections: sections.map((s) => ({
       text: sanitizeUserInput(s.text),
-      body: s.body ? sanitizeUserInput(s.body).slice(0, 600) : '',
+      body: s.body ? condenseBody(sanitizeUserInput(s.body), 1200) : '',
     })),
   };
   const h2Texts = inputData.sections.map((s) => s.text);
@@ -235,46 +251,62 @@ export async function buildOptimizedImagePrompts(opts: {
     })
     .join('\n');
 
-  // Vertex (Imagen 4) 向け: アニメ調 slice-of-life シーン (タイトル文字はサーバー側 overlay)
+  // Vertex (Imagen 4) 向け: アニメ調 slice-of-life シーン
+  // **2段階プロンプト**: ①本文から concrete elements を列挙 → ②それを描画するシーン構成 → ③Imagen 用最終プロンプト
   if (isVertexProvider()) {
-    const userPrompt = `You are an art director for a Japanese lifestyle/tech blog (naturaledge.jp style).
-Generate optimized prompts for **Imagen 4** to produce header illustrations.
+    const userPrompt = `You are an art director for a Japanese lifestyle/tech blog (naturaledge.jp/media style).
+Generate optimized image specifications for **Imagen 4**, modelled after this concrete reference:
 
-IMPORTANT: A Japanese title bar will be overlaid by post-processing.
-**The image itself MUST contain NO text, NO letters, NO Japanese characters, NO writing of any kind.**
-Just leave airy negative space at the top ~20% of the canvas for the title bar to be placed later.
+# Reference image style (THIS is what we are emulating)
+The reference is a warm anime-style 16:9 illustration (Studio Ghibli / Makoto Shinkai feel) where:
+- Two friendly Japanese characters (e.g. a cheerful young woman giving a thumbs-up + a relaxed young man) are doing the topic action in a real-world environment (a real room with real props)
+- The scene shows TWO SIDE-BY-SIDE micro-scenarios in one frame (e.g. left = "集中時 / ゲームプレイ中" with dual monitors + RGB tower; right = "リラックス時 / リクライニング140度" with tilted chair) — each side visualises a distinct body claim
+- **3-6 floating speech bubbles** around the characters, each containing a **SHORT Japanese label drawn from the body (3-8 chars)** like 「快適！」「腰が楽！」「TSAロック」「1898年創業」「PFCバランス」「集中力UP」
+- A pastel base palette (sky-blue / cream) + ONE bright accent (sunny yellow / coral pink / mint)
+- Thick clean outlines, cel-shaded coloring
+- The TOP 18-20% of the canvas is a low-contrast pastel band (sky or wall) reserved for a title overlay added later by post-processing — DO NOT put faces or major props in the top band
 
 Article context:
 - Title (Japanese): ${inputData.title}
 - Keywords: ${inputData.keywords.join(', ')}
-${inputData.leadBody ? `- 記事冒頭(リード): ${inputData.leadBody}\n` : ''}
-- h2 sections (Japanese, 各見出しの直下本文も併記):
+${inputData.leadBody ? `- 記事冒頭リード: ${inputData.leadBody}\n` : ''}
+- h2 sections (見出し + 直下本文):
 ${sectionsBlock}
 
-Generate one prompt for the eyecatch hero image and one for each h2 section.
+# Your task (TWO-STAGE per image)
+For the eyecatch and each h2, do BOTH stages:
 
-# Reference style (MUST match these characteristics)
-- **Warm anime-style illustration** (Studio Ghibli / Makoto Shinkai-inspired soft anime), NOT flat infographic, NOT photograph, NOT 3D-render
-- **Slice-of-life scene with 1-2 friendly Japanese characters** (cheerful young woman, relaxed young man, etc.) actually engaged with the topic in a real-world environment
-- **Thick clean outlines**, cel-shaded coloring, vivid pastel base + ONE bright accent color (sky blue + sunny yellow / pink + mint / orange + cream)
-- **16:9 horizontal landscape**, generous AIRY EMPTY SPACE at the TOP 20% of the canvas (this space will be filled by an overlay title bar — keep it visually simple, low contrast, no characters' faces in the top band)
-- Characters and main composition centered in the LOWER 80% of the canvas
-- **Empty speech bubbles** around characters (NO text inside — the bubbles themselves are pure visual elements)
-- DO NOT include any text, letters, kanji, kana, romaji, numbers, or written symbols anywhere in the image
+**Stage A — Concrete extraction (Japanese):**
+Read the body summary and extract 5-8 distinct CONCRETE visual elements that the image MUST show. Each element is a noun phrase (3-12 Japanese chars) representing a product name, number, named concept, action, or environment item. Examples:
+- リモワ理由 body → ["グルーヴ加工","TSAロック","マルチホイール","1898年創業","ポリカーボネート","アルミ筐体"]
+- ダイエット基本 body → ["PFCバランス","GI値表","食事順序の矢印","ハリスベネディクト式","1400kcal目標","活動係数"]
 
-# Composition rules
-- A CONCRETE slice-of-life moment that depicts the article's actual topic (person actually sitting in the gaming chair / actually choosing a Rimowa case / actually preparing balanced meals)
-- Characters' actions/objects/setting must DIRECTLY visualize the h2 section's body summary (specific products, scenarios, environments mentioned in the body)
-- DO NOT use: grid layouts, icon-only compositions, no-people compositions, photorealistic style, flat infographic style, any visible text
-- DO include: real environments (cozy room, store, kitchen, travel scene), props that match the body content, expressive character faces (in the lower portion)
-- Each prompt 130-200 words, very specific about scene/characters/environment/props (but NEVER about text content)
+**Stage B — Visual plan (Japanese, 1-3 lines):**
+Describe HOW to compose those elements: who is where, what they're doing, left/right split if any, background, props per side.
+
+**Stage C — Final Imagen prompt (English, 150-220 words):**
+Write the actual prompt for Imagen 4. It MUST:
+- Begin with "Warm anime-style 16:9 illustration, Studio Ghibli-inspired."
+- Mention "TOP 18% is a low-contrast pastel sky/wall band reserved for title overlay — no faces or major props in the top band."
+- Describe the lower 82% scene per Stage B
+- **EXPLICITLY name every concreteElement from Stage A** somewhere in the prompt (as part of scene description, prop list, or speech-bubble content)
+- Specify 3-6 speech bubbles around characters with their **exact Japanese label text** in quotes like "speech bubble saying 「TSAロック」"
+- End with "Thick clean outlines, cel-shaded soft anime coloring, pastel sky-blue/cream palette with bright [accent color] accents."
+- Aside from the speech bubble labels and product tag labels, NO other text or large headlines should appear anywhere
 
 # Output (pure JSON, no fences, no commentary)
 {
-  "eyecatch": "Warm anime-style 16:9 illustration, Studio Ghibli-inspired. Composition leaves the top 20% empty for a title overlay (use simple low-contrast pastel sky or wall in that area). Lower 80%: Scene with characters: ... Environment: ... Props: ... Empty speech bubbles (no text inside) near characters. NO TEXT, NO LETTERS, NO WRITING anywhere. Pastel + bright accent palette.",
+  "eyecatch": {
+    "concreteElements": ["...", "...", "...", "..."],
+    "visualPlan": "...",
+    "prompt": "Warm anime-style 16:9 illustration, Studio Ghibli-inspired. TOP 18% is a low-contrast pastel sky/wall band reserved for title overlay — no faces or major props in the top band. Lower 82%: ... [naming every concreteElement] ... 4 speech bubbles around characters saying \\"...\\", \\"...\\", \\"...\\", \\"...\\". Thick clean outlines, cel-shaded, pastel sky-blue and cream palette with bright sunny yellow accents."
+  },
   "h2": [
-    "Warm anime-style 16:9 illustration, Studio Ghibli-inspired. Top 20%: empty simple pastel background area for overlay. Lower 80%: Scene with characters: ... Environment from section body: ... Props: ... Empty speech bubbles near characters. NO TEXT, NO LETTERS, NO KANJI, NO KANA anywhere.",
-    ...
+    {
+      "concreteElements": ["...", "...", "...", "...", "..."],
+      "visualPlan": "...",
+      "prompt": "Warm anime-style 16:9 illustration, Studio Ghibli-inspired. TOP 18% pastel band reserved for title overlay. Lower 82%: ... [explicitly naming every concreteElement] ... 5 speech bubbles around characters saying \\"...\\", \\"...\\", \\"...\\", \\"...\\", \\"...\\". Thick outlines, cel-shaded, pastel + bright [accent] palette."
+    }
   ]
 }`;
     return await tryLlmPrompts(userPrompt, fallbackOpts);
@@ -321,6 +353,39 @@ Generate one prompt for the eyecatch (hero image) and one prompt for each h2 sec
   return await tryLlmPrompts(userPrompt, fallbackOpts);
 }
 
+/** 構造化 LLM 出力(2段階版)。 */
+interface StructuredImageSpec {
+  concreteElements?: string[];
+  visualPlan?: string;
+  prompt?: string;
+}
+
+/**
+ * 構造化 spec を Imagen 用の最終プロンプトに正規化する。
+ * concreteElements と visualPlan を強制的に prompt 文末に append して、
+ * LLM が prompt 内で言及し損ねた要素も Imagen に確実に届くようにする。
+ */
+function specToImagenPrompt(spec: StructuredImageSpec | string | undefined, fallback: string): string {
+  if (!spec) return fallback;
+  if (typeof spec === 'string') return spec || fallback;
+  const base = (spec.prompt || '').trim();
+  if (!base) return fallback;
+  const elements = (spec.concreteElements || []).filter((s) => typeof s === 'string' && s.trim()).slice(0, 12);
+  const plan = (spec.visualPlan || '').trim();
+  const parts: string[] = [base];
+  if (elements.length > 0) {
+    parts.push(
+      `\n\nMUST visually include every one of these concrete elements (as scene objects, speech-bubble labels, or product tags): ${elements
+        .map((e) => `「${e}」`)
+        .join(', ')}.`,
+    );
+  }
+  if (plan) {
+    parts.push(`\nLayout plan: ${plan}`);
+  }
+  return parts.join('');
+}
+
 async function tryLlmPrompts(
   userPrompt: string,
   opts: { title: string; keywords: string[]; h2Texts: string[] },
@@ -331,18 +396,24 @@ async function tryLlmPrompts(
       taskType: 'image_prompt',
       system: BASE_SYSTEM,
       user: userPrompt,
-      maxTokens: 4000,
+      maxTokens: 8000,
       jsonMode: true,
       temperature: 0.8,
     });
     const text = res.content.trim();
     const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-    const parsed = JSON.parse(cleaned) as { eyecatch?: string; h2?: string[] };
+    const parsed = JSON.parse(cleaned) as {
+      eyecatch?: string | StructuredImageSpec;
+      h2?: Array<string | StructuredImageSpec>;
+    };
+    const eyecatchFallback = buildEyecatchPrompt(opts);
+    const h2Fallback = (i: number) => buildH2Prompt({ h2Text: opts.h2Texts[i], articleTitle: opts.title });
     return {
-      eyecatch: parsed.eyecatch || buildEyecatchPrompt(opts),
-      h2: parsed.h2 && parsed.h2.length >= opts.h2Texts.length
-        ? parsed.h2.slice(0, opts.h2Texts.length)
-        : opts.h2Texts.map((t) => buildH2Prompt({ h2Text: t, articleTitle: opts.title })),
+      eyecatch: specToImagenPrompt(parsed.eyecatch, eyecatchFallback),
+      h2:
+        parsed.h2 && parsed.h2.length >= opts.h2Texts.length
+          ? parsed.h2.slice(0, opts.h2Texts.length).map((s, i) => specToImagenPrompt(s, h2Fallback(i)))
+          : opts.h2Texts.map((_t, i) => h2Fallback(i)),
     };
   } catch (err) {
     console.error('[buildOptimizedImagePrompts] fallback:', (err as Error).message);
@@ -371,7 +442,7 @@ export function buildEyecatchPrompt(opts: {
   keywords: string[];
 }): string {
   if (isVertexProvider()) {
-    return `Warm anime-style slice-of-life illustration in 16:9 landscape format. Studio Ghibli / Makoto Shinkai inspired. The top 20% of the canvas must be left as airy empty pastel sky/wall background for a title bar to be overlaid later (do NOT draw faces or major elements there). Lower 80%: 1-2 friendly Japanese characters interacting with a scene related to ${opts.keywords.join(', ')}. Thick clean outlines, cel-shaded soft anime coloring, vivid pastel sky-blue and cream palette with sunny yellow accents. Empty speech bubbles (no text inside) around the characters. NO TEXT, NO LETTERS, NO KANJI, NO KANA, NO WRITING anywhere in the image. NO grid, NO icon-only layout, MUST have people in a real environment.`;
+    return `Warm anime-style slice-of-life illustration in 16:9 landscape format. Studio Ghibli / Makoto Shinkai inspired. The TOP 18% of the canvas must be a low-contrast pastel sky/wall band reserved for a title overlay added later — do NOT draw faces or major props in that top band. Lower 82%: 1-2 friendly Japanese characters interacting with a scene related to ${opts.keywords.join(', ')}. Thick clean outlines, cel-shaded soft anime coloring, vivid pastel sky-blue and cream palette with sunny yellow accents. 3-5 speech bubbles around the characters with SHORT Japanese labels (3-8 chars) drawn from the keywords like ${opts.keywords.slice(0, 3).map((k) => `「${k}」`).join(' ')} or short exclamations like 「快適！」「失敗しない！」「お得！」. Aside from the speech bubble labels, NO other text/title/large headlines anywhere. NO grid, NO icon-only layout, MUST have people in a real environment.`;
   }
   // フォトリアル(Pollinations)版フォールバック
   return `Hyper-realistic, eye-catching editorial photograph for a blog article titled "${opts.title}". Keywords: ${opts.keywords.join(', ')}. Cinematic lighting with golden hour glow, vibrant saturated colors, shallow depth of field, sharp focus on the main subject. Premium magazine quality, 8k resolution. Rule-of-thirds composition with a dynamic camera angle. Emotionally engaging, attention-grabbing, makes the viewer want to read more. Modern editorial aesthetic. NO TEXT, NO LETTERS, NO WATERMARKS. 16:9 horizontal landscape orientation.`;
@@ -382,7 +453,7 @@ export function buildH2Prompt(opts: {
   articleTitle: string;
 }): string {
   if (isVertexProvider()) {
-    return `Warm anime-style slice-of-life illustration in 16:9 landscape for an article section (article: "${opts.articleTitle}"). Studio Ghibli / Makoto Shinkai inspired. Top 20% of canvas: airy empty pastel background reserved for a title overlay (no faces/major elements). Lower 80%: 1-2 friendly Japanese characters actually engaged with the topic in a concrete real-world environment matching the section topic "${opts.h2Text}". Thick clean outlines, cel-shaded coloring, vivid pastel + 1 bright accent color. Empty speech bubbles (no text) near characters. NO TEXT, NO LETTERS, NO KANJI, NO KANA, NO WRITING anywhere. NO grid, NO icons-only, MUST be a slice-of-life scene with people.`;
+    return `Warm anime-style slice-of-life illustration in 16:9 landscape for an article section (article: "${opts.articleTitle}"). Studio Ghibli / Makoto Shinkai inspired. TOP 18% of canvas: low-contrast pastel sky/wall band reserved for a title overlay (no faces/major elements). Lower 82%: 1-2 friendly Japanese characters actually engaged with the topic in a concrete real-world environment matching the section topic "${opts.h2Text}". Thick clean outlines, cel-shaded coloring, vivid pastel + 1 bright accent color. 3-5 speech bubbles with SHORT Japanese labels (3-8 chars) drawn from the section topic — derived from "${opts.h2Text}". Aside from speech bubble labels, NO other text/headlines anywhere. NO grid, NO icons-only, MUST be a slice-of-life scene with people.`;
   }
   // フォトリアル(Pollinations)版フォールバック
   return `Hyper-realistic editorial photograph illustrating the topic: "${opts.h2Text}" (from a Japanese blog article about "${opts.articleTitle}"). Cinematic lighting, vibrant colors, sharp focus, shallow depth of field. Concrete photographic scene with real people, objects, or environments related to the topic. Premium magazine quality, 8k resolution. Engaging and visually intriguing composition. NO TEXT, NO LETTERS, NO WATERMARKS. 16:9 horizontal landscape.`;
