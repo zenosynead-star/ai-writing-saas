@@ -6,11 +6,13 @@
  */
 
 import { generate as llmGenerate, BASE_SYSTEM, sanitizeUserInput } from './llm';
+import { generateVertexImage, VertexImageError } from './vertexImageGen';
 
 export interface GenerateImageOptions {
   prompt: string;
   aspectRatio?: string;
-  provider?: 'pollinations' | 'gemini';
+  /** 'vertex' = Vertex AI Gemini 3.1 Flash Image (Nano Banana 2、本命) */
+  provider?: 'vertex' | 'pollinations' | 'gemini';
   pollModel?: string;
   seed?: number;
 }
@@ -120,7 +122,28 @@ async function generateWithGemini(opts: GenerateImageOptions): Promise<GenerateI
 }
 
 export async function generateImage(opts: GenerateImageOptions): Promise<GenerateImageResult> {
-  const provider = opts.provider || (process.env.IMAGE_PROVIDER as 'pollinations' | 'gemini' | undefined) || 'pollinations';
+  // env で IMAGE_PROVIDER を指定:
+  //   'vertex'       → Vertex AI Gemini 3.1 Flash Image (Nano Banana 2、推奨)
+  //   'gemini'       → AI Studio Gemini Image (有料tier必須、Free=quota 0)
+  //   'pollinations' → Pollinations.ai (完全無料、Flux、日本語テキスト不可)
+  const provider =
+    opts.provider ||
+    (process.env.IMAGE_PROVIDER as 'vertex' | 'pollinations' | 'gemini' | undefined) ||
+    'pollinations';
+
+  // Vertex 失敗時は Pollinations にフォールバック(可用性優先)
+  if (provider === 'vertex') {
+    try {
+      const r = await generateVertexImage({ prompt: opts.prompt, aspectRatio: opts.aspectRatio });
+      return { base64: r.base64, mimeType: r.mimeType, modelUsed: r.modelUsed };
+    } catch (e) {
+      if (e instanceof VertexImageError && (e.statusCode === 400 || e.statusCode === 408 || e.statusCode === 429 || e.statusCode >= 500)) {
+        console.warn('[imageGen] Vertex 失敗 → Pollinations にフォールバック:', e.message);
+        return generateWithPollinations(opts);
+      }
+      throw e;
+    }
+  }
   if (provider === 'gemini') return generateWithGemini(opts);
   return generateWithPollinations(opts);
 }
@@ -140,6 +163,44 @@ export async function buildOptimizedImagePrompts(opts: {
     h2s: opts.h2Texts.map(sanitizeUserInput),
   };
 
+  // Vertex (Gemini 3.1 Flash Image) は日本語テキストOK・インフォグラフィック向き
+  if (isVertexProvider()) {
+    const userPrompt = `You are an art director for a Japanese tech blog (naturaledge.jp style).
+Generate optimized prompts for Gemini 3.1 Flash Image to produce **modern flat infographic illustrations** with Japanese headline text rendered cleanly inside the image.
+
+Article context:
+- Title (Japanese): ${inputData.title}
+- Keywords: ${inputData.keywords.join(', ')}
+- h2 sections (Japanese): ${inputData.h2s.map((t, i) => `${i + 1}. ${t}`).join(' | ')}
+
+Generate one prompt for the eyecatch hero image and one for each h2 section.
+
+# Style requirements (apply to ALL prompts)
+- Modern flat illustration, infographic style, soft pastel colors (light blue / cream / white)
+- 16:9 horizontal aspect ratio
+- Japanese headline text MUST be rendered prominently at the top of each image (this is the key feature)
+- Below the headline: a clean grid (2-6 cells) with iconic illustrations
+- Friendly, approachable Japanese tech-blog aesthetic
+- No watermark, no human faces close-up
+
+# Content rules
+- Eyecatch: capture the article's main concept with a hero illustration + the full Japanese title at top
+- Each h2: visualize the section's specific topic with a focused grid showing concrete items/concepts mentioned in the heading
+- The image MUST include the Japanese heading text exactly as given
+- Each prompt 80-150 words, very specific about layout/colors/icons
+
+# Output (pure JSON, no fences, no commentary)
+{
+  "eyecatch": "Create a Japanese blog header (16:9) ... include Japanese title text \\"...\\" at top ... grid of ... pastel colors ...",
+  "h2": [
+    "Create a Japanese blog section image (16:9) ... include Japanese heading \\"...\\" ... grid of N cells showing ...",
+    ...
+  ]
+}`;
+    return await tryLlmPrompts(userPrompt, opts);
+  }
+
+  // Pollinations (Flux) 向け: 写真風プロンプト
   const userPrompt = `You are an expert visual director for blog hero images.
 Generate optimal English image prompts for Flux/Stable Diffusion that will produce eye-catching, photo-realistic, professional editorial photographs.
 
@@ -175,6 +236,13 @@ Generate one prompt for the eyecatch (hero image) and one prompt for each h2 sec
   ]
 }`;
 
+  return await tryLlmPrompts(userPrompt, opts);
+}
+
+async function tryLlmPrompts(
+  userPrompt: string,
+  opts: { title: string; keywords: string[]; h2Texts: string[] },
+): Promise<{ eyecatch: string; h2: string[] }> {
   try {
     const res = await llmGenerate({
       logicalModel: 'low_cost',
@@ -186,12 +254,11 @@ Generate one prompt for the eyecatch (hero image) and one prompt for each h2 sec
       temperature: 0.8,
     });
     const text = res.content.trim();
-    // strip fences if any
     const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
     const parsed = JSON.parse(cleaned) as { eyecatch?: string; h2?: string[] };
     return {
       eyecatch: parsed.eyecatch || buildEyecatchPrompt(opts),
-      h2: (parsed.h2 && parsed.h2.length >= opts.h2Texts.length)
+      h2: parsed.h2 && parsed.h2.length >= opts.h2Texts.length
         ? parsed.h2.slice(0, opts.h2Texts.length)
         : opts.h2Texts.map((t) => buildH2Prompt({ h2Text: t, articleTitle: opts.title })),
     };
@@ -204,18 +271,39 @@ Generate one prompt for the eyecatch (hero image) and one prompt for each h2 sec
   }
 }
 
-/** フォールバック: 高品質テンプレート(アイキャッチ) */
+/**
+ * Vertex Gemini Image (Nano Banana 2) 向けのプロンプトテンプレート。
+ * wp-article-rewriter の `DEFAULT_PROMPT_TEMPLATE` を参考に、
+ * 日本語タイトル + インフォグラフィック・フラットイラスト指定。
+ *
+ * 参考記事 (naturaledge.jp) と同じスタイル:
+ *  - modern flat illustration
+ *  - soft pastel colors (light blue / cream)
+ *  - infographic style with grid layout
+ *  - 日本語見出しテキスト OK (Gemini 3.1 が描画可能)
+ */
 export function buildEyecatchPrompt(opts: {
   title: string;
   keywords: string[];
 }): string {
+  if (isVertexProvider()) {
+    return `Create a Japanese blog header image (16:9) for the article titled "${opts.title}". Style: modern flat illustration, infographic, soft pastel colors (light blue, cream, white background). Include the Japanese title text "${opts.title}" prominently at the top center. Below the title, show a clean grid layout with 2-4 illustrated product/concept cards related to: ${opts.keywords.join(', ')}. Friendly and approachable. Premium magazine-quality layout. No watermark, no faces close-up.`;
+  }
+  // フォトリアル(Pollinations)版フォールバック
   return `Hyper-realistic, eye-catching editorial photograph for a blog article titled "${opts.title}". Keywords: ${opts.keywords.join(', ')}. Cinematic lighting with golden hour glow, vibrant saturated colors, shallow depth of field, sharp focus on the main subject. Premium magazine quality, 8k resolution. Rule-of-thirds composition with a dynamic camera angle. Emotionally engaging, attention-grabbing, makes the viewer want to read more. Modern editorial aesthetic. NO TEXT, NO LETTERS, NO WATERMARKS. 16:9 horizontal landscape orientation.`;
 }
 
-/** フォールバック: 高品質テンプレート(h2) */
 export function buildH2Prompt(opts: {
   h2Text: string;
   articleTitle: string;
 }): string {
+  if (isVertexProvider()) {
+    return `Create a Japanese blog section image (16:9) for the heading "${opts.h2Text}" in an article about "${opts.articleTitle}". Style: modern flat illustration, infographic, soft pastel colors (light blue, cream). Include the Japanese heading text "${opts.h2Text}" at the top. Below the heading, show a clean grid (3-6 cells) with illustrated icons/cards that visually break down the topic. Friendly characters and approachable design. Like a Japanese tech blog explainer. Premium magazine-quality layout. No watermark.`;
+  }
+  // フォトリアル(Pollinations)版フォールバック
   return `Hyper-realistic editorial photograph illustrating the topic: "${opts.h2Text}" (from a Japanese blog article about "${opts.articleTitle}"). Cinematic lighting, vibrant colors, sharp focus, shallow depth of field. Concrete photographic scene with real people, objects, or environments related to the topic. Premium magazine quality, 8k resolution. Engaging and visually intriguing composition. NO TEXT, NO LETTERS, NO WATERMARKS. 16:9 horizontal landscape.`;
+}
+
+function isVertexProvider(): boolean {
+  return (process.env.IMAGE_PROVIDER || 'pollinations').toLowerCase() === 'vertex';
 }
