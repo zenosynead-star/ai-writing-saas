@@ -102,7 +102,11 @@ export async function POST(req: NextRequest) {
     if (scope === 'all' || scope === 'eyecatch') {
       try {
         await prisma.articleImage.deleteMany({ where: { articleId, kind: 'eyecatch' } });
-        const img = await generateImage({ prompt: prompts.eyecatch, aspectRatio: '16:9' });
+        const img = await generateImage({
+          prompt: prompts.eyecatch,
+          aspectRatio: '16:9',
+          overlayTitle: article.title,
+        });
         const saved = await prisma.articleImage.create({
           data: {
             articleId,
@@ -135,7 +139,11 @@ export async function POST(req: NextRequest) {
         try {
           await prisma.articleImage.deleteMany({ where: { articleId, kind: 'h2', h2Index: idx } });
           const prompt = prompts.h2[idx] || buildH2Prompt({ h2Text: allH2Texts[idx], articleTitle: article.title });
-          const img = await generateImage({ prompt, aspectRatio: '16:9' });
+          const img = await generateImage({
+            prompt,
+            aspectRatio: '16:9',
+            overlayTitle: allH2Texts[idx],
+          });
           const saved = await prisma.articleImage.create({
             data: {
               articleId,

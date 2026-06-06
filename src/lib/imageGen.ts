@@ -7,6 +7,7 @@
 
 import { generate as llmGenerate, BASE_SYSTEM, sanitizeUserInput } from './llm';
 import { generateVertexImage, VertexImageError } from './vertexImageGen';
+import { overlayTitleBar } from './imageOverlay';
 
 export interface GenerateImageOptions {
   prompt: string;
@@ -15,6 +16,11 @@ export interface GenerateImageOptions {
   provider?: 'vertex' | 'pollinations' | 'gemini';
   pollModel?: string;
   seed?: number;
+  /**
+   * 指定すると生成後に Canvas で「黄色バー + 白文字+黒縁取り」のタイトルを上部に overlay する。
+   * Imagen 4 等は日本語テキスト描画が崩壊するための補正処理。
+   */
+  overlayTitle?: string;
 }
 
 export interface GenerateImageResult {
@@ -138,6 +144,16 @@ export async function generateImage(opts: GenerateImageOptions): Promise<Generat
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
         const r = await generateVertexImage({ prompt: opts.prompt, aspectRatio: opts.aspectRatio });
+        // 日本語タイトルが指定されていれば Canvas で overlay (Imagen 系は日本語が崩れるため)
+        if (opts.overlayTitle) {
+          try {
+            const overlaid = await overlayTitleBar(r.base64, opts.overlayTitle);
+            return { base64: overlaid, mimeType: 'image/png', modelUsed: `${r.modelUsed}+overlay` };
+          } catch (oe) {
+            console.warn('[imageGen] overlay failed, return raw image:', (oe as Error).message);
+            return { base64: r.base64, mimeType: r.mimeType, modelUsed: r.modelUsed };
+          }
+        }
         return { base64: r.base64, mimeType: r.mimeType, modelUsed: r.modelUsed };
       } catch (e) {
         lastErr = e;
@@ -219,10 +235,14 @@ export async function buildOptimizedImagePrompts(opts: {
     })
     .join('\n');
 
-  // Vertex (Gemini Image / Nano Banana) は日本語テキストOK・インフォグラフィック向き
+  // Vertex (Imagen 4) 向け: アニメ調 slice-of-life シーン (タイトル文字はサーバー側 overlay)
   if (isVertexProvider()) {
-    const userPrompt = `You are an art director for a Japanese tech blog (naturaledge.jp style).
-Generate optimized prompts for Gemini Image (Nano Banana) to produce **modern flat infographic illustrations** with Japanese headline text rendered cleanly inside the image.
+    const userPrompt = `You are an art director for a Japanese lifestyle/tech blog (naturaledge.jp style).
+Generate optimized prompts for **Imagen 4** to produce header illustrations.
+
+IMPORTANT: A Japanese title bar will be overlaid by post-processing.
+**The image itself MUST contain NO text, NO letters, NO Japanese characters, NO writing of any kind.**
+Just leave airy negative space at the top ~20% of the canvas for the title bar to be placed later.
 
 Article context:
 - Title (Japanese): ${inputData.title}
@@ -233,26 +253,27 @@ ${sectionsBlock}
 
 Generate one prompt for the eyecatch hero image and one for each h2 section.
 
-# Style requirements (apply to ALL prompts)
-- Modern flat illustration, infographic style, soft pastel colors (light blue / cream / white)
-- 16:9 horizontal aspect ratio
-- Japanese headline text MUST be rendered prominently at the top of each image (this is the key feature)
-- Below the headline: a clean grid (2-6 cells) with iconic illustrations
-- Friendly, approachable Japanese tech-blog aesthetic
-- No watermark, no human faces close-up
+# Reference style (MUST match these characteristics)
+- **Warm anime-style illustration** (Studio Ghibli / Makoto Shinkai-inspired soft anime), NOT flat infographic, NOT photograph, NOT 3D-render
+- **Slice-of-life scene with 1-2 friendly Japanese characters** (cheerful young woman, relaxed young man, etc.) actually engaged with the topic in a real-world environment
+- **Thick clean outlines**, cel-shaded coloring, vivid pastel base + ONE bright accent color (sky blue + sunny yellow / pink + mint / orange + cream)
+- **16:9 horizontal landscape**, generous AIRY EMPTY SPACE at the TOP 20% of the canvas (this space will be filled by an overlay title bar — keep it visually simple, low contrast, no characters' faces in the top band)
+- Characters and main composition centered in the LOWER 80% of the canvas
+- **Empty speech bubbles** around characters (NO text inside — the bubbles themselves are pure visual elements)
+- DO NOT include any text, letters, kanji, kana, romaji, numbers, or written symbols anywhere in the image
 
-# Content rules (重要)
-- 各 h2 の "本文要約" を必ず読み、その本文で具体的に言及されている**製品名・数値・固有の概念・チェック項目・比較軸**をイラスト/アイコン/小見出しとして画像内に反映すること
-- 単なる「リクライニング機能のアイコン」ではなく、本文で語られている「角度の数値(135度/180度等)」「具体的な選定基準(耐荷重/ロック機構等)」「対象シーン(仮眠/集中ゲーミング等)」を絵に落とし込む
-- The image MUST include the Japanese heading text exactly as given (一字一句正確に)
-- Eyecatch: 記事タイトル + リード本文の核となる主張(誰の何の悩みをどう解決するか)を1枚に
-- Each prompt 100-180 words, very specific about layout/colors/icons/labels
+# Composition rules
+- A CONCRETE slice-of-life moment that depicts the article's actual topic (person actually sitting in the gaming chair / actually choosing a Rimowa case / actually preparing balanced meals)
+- Characters' actions/objects/setting must DIRECTLY visualize the h2 section's body summary (specific products, scenarios, environments mentioned in the body)
+- DO NOT use: grid layouts, icon-only compositions, no-people compositions, photorealistic style, flat infographic style, any visible text
+- DO include: real environments (cozy room, store, kitchen, travel scene), props that match the body content, expressive character faces (in the lower portion)
+- Each prompt 130-200 words, very specific about scene/characters/environment/props (but NEVER about text content)
 
 # Output (pure JSON, no fences, no commentary)
 {
-  "eyecatch": "Create a Japanese blog header (16:9) ... include Japanese title text \\"...\\" at top ... grid of N cells labeled in Japanese with \\"...\\", \\"...\\" ... pastel colors ...",
+  "eyecatch": "Warm anime-style 16:9 illustration, Studio Ghibli-inspired. Composition leaves the top 20% empty for a title overlay (use simple low-contrast pastel sky or wall in that area). Lower 80%: Scene with characters: ... Environment: ... Props: ... Empty speech bubbles (no text inside) near characters. NO TEXT, NO LETTERS, NO WRITING anywhere. Pastel + bright accent palette.",
   "h2": [
-    "Create a Japanese blog section image (16:9) ... include Japanese heading \\"...\\" ... grid of N cells, each labeled with concrete keywords from the section body like \\"...\\", \\"...\\" ...",
+    "Warm anime-style 16:9 illustration, Studio Ghibli-inspired. Top 20%: empty simple pastel background area for overlay. Lower 80%: Scene with characters: ... Environment from section body: ... Props: ... Empty speech bubbles near characters. NO TEXT, NO LETTERS, NO KANJI, NO KANA anywhere.",
     ...
   ]
 }`;
@@ -337,18 +358,20 @@ async function tryLlmPrompts(
  * wp-article-rewriter の `DEFAULT_PROMPT_TEMPLATE` を参考に、
  * 日本語タイトル + インフォグラフィック・フラットイラスト指定。
  *
- * 参考記事 (naturaledge.jp) と同じスタイル:
- *  - modern flat illustration
- *  - soft pastel colors (light blue / cream)
- *  - infographic style with grid layout
- *  - 日本語見出しテキスト OK (Gemini 3.1 が描画可能)
+ * 参考記事 (naturaledge.jp/media の heading-91-...png) と同じスタイル:
+ *  - Warm anime-style (Ghibli / Shinkai 風) slice-of-life illustration
+ *  - 1-2 friendly Japanese characters interacting with the topic
+ *  - Thick clean outlines, vivid pastel + bright accent
+ *  - 16:9 horizontal, large rounded gothic title bar at top
+ *  - 3-5 speech bubbles with short Japanese phrases drawn from topic
+ *  - Imagen 4 で日本語タイトル描画
  */
 export function buildEyecatchPrompt(opts: {
   title: string;
   keywords: string[];
 }): string {
   if (isVertexProvider()) {
-    return `Create a Japanese blog header image (16:9) for the article titled "${opts.title}". Style: modern flat illustration, infographic, soft pastel colors (light blue, cream, white background). Include the Japanese title text "${opts.title}" prominently at the top center. Below the title, show a clean grid layout with 2-4 illustrated product/concept cards related to: ${opts.keywords.join(', ')}. Friendly and approachable. Premium magazine-quality layout. No watermark, no faces close-up.`;
+    return `Warm anime-style slice-of-life illustration in 16:9 landscape format. Studio Ghibli / Makoto Shinkai inspired. The top 20% of the canvas must be left as airy empty pastel sky/wall background for a title bar to be overlaid later (do NOT draw faces or major elements there). Lower 80%: 1-2 friendly Japanese characters interacting with a scene related to ${opts.keywords.join(', ')}. Thick clean outlines, cel-shaded soft anime coloring, vivid pastel sky-blue and cream palette with sunny yellow accents. Empty speech bubbles (no text inside) around the characters. NO TEXT, NO LETTERS, NO KANJI, NO KANA, NO WRITING anywhere in the image. NO grid, NO icon-only layout, MUST have people in a real environment.`;
   }
   // フォトリアル(Pollinations)版フォールバック
   return `Hyper-realistic, eye-catching editorial photograph for a blog article titled "${opts.title}". Keywords: ${opts.keywords.join(', ')}. Cinematic lighting with golden hour glow, vibrant saturated colors, shallow depth of field, sharp focus on the main subject. Premium magazine quality, 8k resolution. Rule-of-thirds composition with a dynamic camera angle. Emotionally engaging, attention-grabbing, makes the viewer want to read more. Modern editorial aesthetic. NO TEXT, NO LETTERS, NO WATERMARKS. 16:9 horizontal landscape orientation.`;
@@ -359,7 +382,7 @@ export function buildH2Prompt(opts: {
   articleTitle: string;
 }): string {
   if (isVertexProvider()) {
-    return `Create a Japanese blog section image (16:9) for the heading "${opts.h2Text}" in an article about "${opts.articleTitle}". Style: modern flat illustration, infographic, soft pastel colors (light blue, cream). Include the Japanese heading text "${opts.h2Text}" at the top. Below the heading, show a clean grid (3-6 cells) with illustrated icons/cards that visually break down the topic. Friendly characters and approachable design. Like a Japanese tech blog explainer. Premium magazine-quality layout. No watermark.`;
+    return `Warm anime-style slice-of-life illustration in 16:9 landscape for an article section (article: "${opts.articleTitle}"). Studio Ghibli / Makoto Shinkai inspired. Top 20% of canvas: airy empty pastel background reserved for a title overlay (no faces/major elements). Lower 80%: 1-2 friendly Japanese characters actually engaged with the topic in a concrete real-world environment matching the section topic "${opts.h2Text}". Thick clean outlines, cel-shaded coloring, vivid pastel + 1 bright accent color. Empty speech bubbles (no text) near characters. NO TEXT, NO LETTERS, NO KANJI, NO KANA, NO WRITING anywhere. NO grid, NO icons-only, MUST be a slice-of-life scene with people.`;
   }
   // フォトリアル(Pollinations)版フォールバック
   return `Hyper-realistic editorial photograph illustrating the topic: "${opts.h2Text}" (from a Japanese blog article about "${opts.articleTitle}"). Cinematic lighting, vibrant colors, sharp focus, shallow depth of field. Concrete photographic scene with real people, objects, or environments related to the topic. Premium magazine quality, 8k resolution. Engaging and visually intriguing composition. NO TEXT, NO LETTERS, NO WATERMARKS. 16:9 horizontal landscape.`;
