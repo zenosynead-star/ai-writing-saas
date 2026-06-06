@@ -251,20 +251,23 @@ export async function buildOptimizedImagePrompts(opts: {
     })
     .join('\n');
 
-  // Vertex (Imagen 4) 向け: アニメ調 slice-of-life シーン
+  // Vertex (Imagen 4) 向け: パステルフラットイラスト + 中央白ボックスタイトル領域
   // **2段階プロンプト**: ①本文から concrete elements を列挙 → ②それを描画するシーン構成 → ③Imagen 用最終プロンプト
   if (isVertexProvider()) {
-    const userPrompt = `You are an art director for a Japanese lifestyle/tech blog (naturaledge.jp/media style).
-Generate optimized image specifications for **Imagen 4**, modelled after this concrete reference:
+    const userPrompt = `You are an art director for a Japanese lifestyle/tech blog header image.
+Generate optimized image specifications for **Imagen 4**, in this EXACT visual style:
 
 # Reference image style (THIS is what we are emulating)
-The reference is a warm anime-style 16:9 illustration (Studio Ghibli / Makoto Shinkai feel) where:
-- Two friendly Japanese characters (e.g. a cheerful young woman giving a thumbs-up + a relaxed young man) are doing the topic action in a real-world environment (a real room with real props)
-- The scene shows TWO SIDE-BY-SIDE micro-scenarios in one frame (e.g. left = "集中時 / ゲームプレイ中" with dual monitors + RGB tower; right = "リラックス時 / リクライニング140度" with tilted chair) — each side visualises a distinct body claim
-- **3-6 floating speech bubbles** around the characters, each containing a **SHORT Japanese label drawn from the body (3-8 chars)** like 「快適！」「腰が楽！」「TSAロック」「1898年創業」「PFCバランス」「集中力UP」
-- A pastel base palette (sky-blue / cream) + ONE bright accent (sunny yellow / coral pink / mint)
-- Thick clean outlines, cel-shaded coloring
-- The TOP 18-20% of the canvas is a low-contrast pastel band (sky or wall) reserved for a title overlay added later by post-processing — DO NOT put faces or major props in the top band
+- **Pastel-toned flat illustration** (NOT photograph, NOT 3D, NOT anime cel-shaded). Bright, friendly, warm.
+- **16:9 horizontal blog header**
+- **Composition**: 1 standing character on the LEFT, 1 sitting (or different pose) character on the RIGHT. Both are friendly Japanese characters appropriate to the article topic.
+- **Decorative houseplants (potted plants / foliage)** on both sides of the canvas (e.g. a monstera in a pot left foreground, hanging plant right corner)
+- **Center area = LARGE EMPTY ROUNDED WHITE CARD** (sized about 60% width × 36% height of the canvas, centered). This box will hold the title — leave it COMPLETELY EMPTY (no text inside, just a clean white rectangle with a thin dark border).
+- **Background**: pastel sky-blue / cream / mint / pale yellow gradient or simple shapes. Cheerful, modern.
+- **Clean thin outlines**, flat fill colors, no heavy shadows
+- A pastel base palette + ONE bright accent (sunny yellow / coral pink / mint green)
+- The characters' actions and the props around them must reflect the article topic (cooking utensils / suitcases / gaming chair / etc. as appropriate)
+- Optional: 2-4 small SHORT-text speech bubbles or small product tags AROUND the characters (NOT inside the center white card), each with a 3-8 character Japanese label drawn from the body content
 
 Article context:
 - Title (Japanese): ${inputData.title}
@@ -286,26 +289,26 @@ Describe HOW to compose those elements: who is where, what they're doing, left/r
 
 **Stage C — Final Imagen prompt (English, 150-220 words):**
 Write the actual prompt for Imagen 4. It MUST:
-- Begin with "Warm anime-style 16:9 illustration, Studio Ghibli-inspired."
-- Mention "TOP 18% is a low-contrast pastel sky/wall band reserved for title overlay — no faces or major props in the top band."
-- Describe the lower 82% scene per Stage B
-- **EXPLICITLY name every concreteElement from Stage A** somewhere in the prompt (as part of scene description, prop list, or speech-bubble content)
-- Specify 3-6 speech bubbles around characters with their **exact Japanese label text** in quotes like "speech bubble saying 「TSAロック」"
-- End with "Thick clean outlines, cel-shaded soft anime coloring, pastel sky-blue/cream palette with bright [accent color] accents."
-- Aside from the speech bubble labels and product tag labels, NO other text or large headlines should appear anywhere
+- Begin with "Pastel-toned flat illustration, Japanese blog header, 16:9 landscape."
+- Mention "Center 60% width × 36% height: a clean empty rounded WHITE CARD with thin dark border — leave COMPLETELY EMPTY (NO TEXT INSIDE), reserved for a post-processing title overlay."
+- Describe the surrounding scene: standing character on LEFT (describe their pose, outfit, what they hold), sitting/different-pose character on RIGHT (describe pose, what they hold/do), decorative POTTED PLANTS / HOUSEPLANTS on both side foreground/corner
+- **EXPLICITLY name every concreteElement from Stage A** somewhere in the prompt (as scene objects, prop labels, or speech-bubble content around — NOT inside — the center card)
+- Optionally add 2-4 small speech bubbles or product tags AROUND the characters (left margin or right margin, NOT in the center area) with their **exact Japanese label text** in quotes like "small speech bubble saying 「TSAロック」"
+- End with "Pastel sky-blue/cream background, [accent color] highlights, clean thin outlines, flat fill colors, bright and cheerful."
+- Aside from the small bubble/tag labels, NO other text — especially NO text inside the center white card
 
 # Output (pure JSON, no fences, no commentary)
 {
   "eyecatch": {
     "concreteElements": ["...", "...", "...", "..."],
     "visualPlan": "...",
-    "prompt": "Warm anime-style 16:9 illustration, Studio Ghibli-inspired. TOP 18% is a low-contrast pastel sky/wall band reserved for title overlay — no faces or major props in the top band. Lower 82%: ... [naming every concreteElement] ... 4 speech bubbles around characters saying \\"...\\", \\"...\\", \\"...\\", \\"...\\". Thick clean outlines, cel-shaded, pastel sky-blue and cream palette with bright sunny yellow accents."
+    "prompt": "Pastel-toned flat illustration, Japanese blog header, 16:9 landscape. Center 60% width × 36% height: clean empty rounded WHITE CARD with thin dark border — COMPLETELY EMPTY, no text. LEFT: standing young Japanese ... [pose, outfit, holds X]. RIGHT: sitting young Japanese ... [pose, holds Y]. Decorative potted plants (monstera in pot left foreground, hanging plant right corner). 3 small speech bubbles in margins saying \\"...\\", \\"...\\", \\"...\\". [Naming every concreteElement]. Pastel sky-blue and cream background, sunny yellow highlights, clean thin outlines, flat fill colors, bright and cheerful."
   },
   "h2": [
     {
       "concreteElements": ["...", "...", "...", "...", "..."],
       "visualPlan": "...",
-      "prompt": "Warm anime-style 16:9 illustration, Studio Ghibli-inspired. TOP 18% pastel band reserved for title overlay. Lower 82%: ... [explicitly naming every concreteElement] ... 5 speech bubbles around characters saying \\"...\\", \\"...\\", \\"...\\", \\"...\\", \\"...\\". Thick outlines, cel-shaded, pastel + bright [accent] palette."
+      "prompt": "Pastel-toned flat illustration, Japanese blog header, 16:9 landscape. Center 60% × 36%: clean empty rounded WHITE CARD with thin dark border — COMPLETELY EMPTY, no text. LEFT: standing character ... RIGHT: sitting/different-pose character ... Potted plants on both sides. Speech bubbles in margins saying \\"...\\", \\"...\\", \\"...\\", \\"...\\". [Naming every concreteElement]. Pastel background, [accent] highlights, clean thin outlines, flat fill colors."
     }
   ]
 }`;
@@ -442,7 +445,7 @@ export function buildEyecatchPrompt(opts: {
   keywords: string[];
 }): string {
   if (isVertexProvider()) {
-    return `Warm anime-style slice-of-life illustration in 16:9 landscape format. Studio Ghibli / Makoto Shinkai inspired. The TOP 18% of the canvas must be a low-contrast pastel sky/wall band reserved for a title overlay added later — do NOT draw faces or major props in that top band. Lower 82%: 1-2 friendly Japanese characters interacting with a scene related to ${opts.keywords.join(', ')}. Thick clean outlines, cel-shaded soft anime coloring, vivid pastel sky-blue and cream palette with sunny yellow accents. 3-5 speech bubbles around the characters with SHORT Japanese labels (3-8 chars) drawn from the keywords like ${opts.keywords.slice(0, 3).map((k) => `「${k}」`).join(' ')} or short exclamations like 「快適！」「失敗しない！」「お得！」. Aside from the speech bubble labels, NO other text/title/large headlines anywhere. NO grid, NO icon-only layout, MUST have people in a real environment.`;
+    return `Pastel-toned flat illustration, Japanese blog header, 16:9 landscape. Center 60% width × 36% height: clean empty rounded WHITE CARD with thin dark border — COMPLETELY EMPTY, no text inside. LEFT: a standing young Japanese character (friendly pose, appropriate to ${opts.keywords.join(', ')}). RIGHT: a sitting or different-pose young Japanese character. Decorative POTTED PLANTS / HOUSEPLANTS on both sides (e.g. monstera in pot left foreground, hanging plant right corner). 2-4 small speech bubbles in the margins (NOT in the center card) with SHORT Japanese labels 3-8 chars like ${opts.keywords.slice(0, 3).map((k) => `「${k}」`).join(' ')}. Pastel sky-blue and cream background, sunny yellow highlights, clean thin outlines, flat fill colors, bright and cheerful. NO other text, NO headlines, NO words inside the center card.`;
   }
   // フォトリアル(Pollinations)版フォールバック
   return `Hyper-realistic, eye-catching editorial photograph for a blog article titled "${opts.title}". Keywords: ${opts.keywords.join(', ')}. Cinematic lighting with golden hour glow, vibrant saturated colors, shallow depth of field, sharp focus on the main subject. Premium magazine quality, 8k resolution. Rule-of-thirds composition with a dynamic camera angle. Emotionally engaging, attention-grabbing, makes the viewer want to read more. Modern editorial aesthetic. NO TEXT, NO LETTERS, NO WATERMARKS. 16:9 horizontal landscape orientation.`;
@@ -453,7 +456,7 @@ export function buildH2Prompt(opts: {
   articleTitle: string;
 }): string {
   if (isVertexProvider()) {
-    return `Warm anime-style slice-of-life illustration in 16:9 landscape for an article section (article: "${opts.articleTitle}"). Studio Ghibli / Makoto Shinkai inspired. TOP 18% of canvas: low-contrast pastel sky/wall band reserved for a title overlay (no faces/major elements). Lower 82%: 1-2 friendly Japanese characters actually engaged with the topic in a concrete real-world environment matching the section topic "${opts.h2Text}". Thick clean outlines, cel-shaded coloring, vivid pastel + 1 bright accent color. 3-5 speech bubbles with SHORT Japanese labels (3-8 chars) drawn from the section topic — derived from "${opts.h2Text}". Aside from speech bubble labels, NO other text/headlines anywhere. NO grid, NO icons-only, MUST be a slice-of-life scene with people.`;
+    return `Pastel-toned flat illustration, Japanese blog section header, 16:9 landscape (article: "${opts.articleTitle}"). Center 60% × 36%: clean empty rounded WHITE CARD with thin dark border — COMPLETELY EMPTY, no text. LEFT: standing young Japanese character relevant to section topic "${opts.h2Text}". RIGHT: sitting or different-pose young Japanese character also relevant. Decorative potted plants / houseplants on both sides. 2-4 small speech bubbles in margins with SHORT Japanese labels (3-8 chars each) derived from "${opts.h2Text}". Pastel sky-blue/cream background with one bright accent color, clean thin outlines, flat fill colors, bright and friendly. NO text inside the center card, NO large headlines anywhere.`;
   }
   // フォトリアル(Pollinations)版フォールバック
   return `Hyper-realistic editorial photograph illustrating the topic: "${opts.h2Text}" (from a Japanese blog article about "${opts.articleTitle}"). Cinematic lighting, vibrant colors, sharp focus, shallow depth of field. Concrete photographic scene with real people, objects, or environments related to the topic. Premium magazine quality, 8k resolution. Engaging and visually intriguing composition. NO TEXT, NO LETTERS, NO WATERMARKS. 16:9 horizontal landscape.`;

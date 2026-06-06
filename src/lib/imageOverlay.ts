@@ -58,7 +58,9 @@ function splitTitle(title: string, ctx: SKRSContext2D, maxWidth: number, fontSiz
 }
 
 /**
- * Imagen 等で生成された画像の上に、参考記事風の「黄色バー + 白文字+黒縁取り」のタイトルを描画する。
+ * Imagen 等で生成された画像の上に「中央配置の白いカードボックス + 大きな黒文字」のタイトルを描画する。
+ *
+ * 参考記事スタイル: ブログヘッダー風、中央に白カード、左右にキャラクター/観葉植物が見える。
  */
 export async function overlayTitleBar(imageBase64: string, title: string): Promise<string> {
   ensureFont();
@@ -71,26 +73,31 @@ export async function overlayTitleBar(imageBase64: string, title: string): Promi
   const ctx = canvas.getContext('2d');
   ctx.drawImage(img, 0, 0);
 
-  // タイトルバー領域: 上端から余白 → 高さ 17%
-  const barHeight = Math.round(H * 0.17);
-  const barY = Math.round(H * 0.04);
-  const barMargin = Math.round(W * 0.04);
-  const barX = barMargin;
-  const barW = W - 2 * barMargin;
+  const cleanTitle = title.replace(/\s+/g, ' ').trim();
 
-  // 影
+  // 中央白カードのレイアウト
+  // - 横幅: 画像幅の 60%
+  // - 高さ: 画像高さの 36%
+  // - 位置: 完全中央
+  const boxW = Math.round(W * 0.60);
+  const boxH = Math.round(H * 0.36);
+  const boxX = Math.round((W - boxW) / 2);
+  const boxY = Math.round((H - boxH) / 2);
+  const cornerR = Math.round(boxH * 0.10);
+
+  // 影 (やや大きめ)
   ctx.save();
-  ctx.fillStyle = 'rgba(0,0,0,0.18)';
-  roundedRect(ctx, barX + 4, barY + 6, barW, barHeight, barHeight / 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.22)';
+  roundedRect(ctx, boxX + 6, boxY + 10, boxW, boxH, cornerR);
   ctx.fill();
   ctx.restore();
 
-  // 黄色いバー + 黒縁
+  // 白カード + 黒縁
   ctx.save();
-  ctx.fillStyle = '#FFD55F';
+  ctx.fillStyle = '#FFFFFF';
   ctx.strokeStyle = '#1a1a1a';
-  ctx.lineWidth = Math.max(3, Math.round(W * 0.004));
-  roundedRect(ctx, barX, barY, barW, barHeight, barHeight / 2);
+  ctx.lineWidth = Math.max(4, Math.round(W * 0.005));
+  roundedRect(ctx, boxX, boxY, boxW, boxH, cornerR);
   ctx.fill();
   ctx.stroke();
   ctx.restore();
@@ -100,47 +107,68 @@ export async function overlayTitleBar(imageBase64: string, title: string): Promi
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  const textMaxWidth = barW - barHeight * 0.6; // バー両端の角丸を避ける
-  const cleanTitle = title.replace(/\s+/g, ' ').trim();
+  const padX = Math.round(boxW * 0.08);
+  const textMaxWidth = boxW - 2 * padX;
+  const targetTextH = boxH * 0.80;
 
-  // 1行で収まる font-size を見つける
-  let fontSize = Math.round(barHeight * 0.55);
-  let lines: string[] = [cleanTitle];
+  // 文字数に応じてフォントサイズを決定 (1〜3行を許容)
+  // まずは大きめサイズで開始
+  let fontSize = Math.round(boxH * 0.34);
   ctx.font = `900 ${fontSize}px "${FONT_FAMILY}"`;
-  let lineWidth = ctx.measureText(cleanTitle).width;
+  let lines: string[] = [cleanTitle];
 
-  if (lineWidth > textMaxWidth) {
+  if (ctx.measureText(cleanTitle).width > textMaxWidth) {
     // 2行に分割
-    fontSize = Math.round(barHeight * 0.36);
     lines = splitTitle(cleanTitle, ctx, textMaxWidth, fontSize);
+    // 2行用に少し縮小
+    fontSize = Math.round(boxH * 0.26);
     ctx.font = `900 ${fontSize}px "${FONT_FAMILY}"`;
     // 各行が幅に収まるまで縮小
     let attempts = 0;
     while (
       attempts < 40 &&
       Math.max(...lines.map((l) => ctx.measureText(l).width)) > textMaxWidth &&
-      fontSize > 14
+      fontSize > 18
     ) {
       fontSize -= 2;
       ctx.font = `900 ${fontSize}px "${FONT_FAMILY}"`;
       attempts++;
     }
+  } else {
+    // 1行: ボックス内で最大限大きく
+    while (
+      ctx.measureText(cleanTitle).width < textMaxWidth * 0.92 &&
+      fontSize < boxH * 0.55
+    ) {
+      fontSize += 2;
+      ctx.font = `900 ${fontSize}px "${FONT_FAMILY}"`;
+    }
+    // 微調整: ちょっとだけ縮小
+    while (ctx.measureText(cleanTitle).width > textMaxWidth && fontSize > 18) {
+      fontSize -= 2;
+      ctx.font = `900 ${fontSize}px "${FONT_FAMILY}"`;
+    }
   }
 
-  // 白文字 + 太い黒縁取り
-  const lineHeight = fontSize * 1.12;
-  const totalH = lineHeight * lines.length;
-  const centerY = barY + barHeight / 2;
-  const startY = centerY - totalH / 2 + lineHeight / 2;
+  // 行間とトータルの高さチェック
+  const lineHeight = fontSize * 1.15;
+  let totalH = lineHeight * lines.length;
+  while (totalH > targetTextH && fontSize > 18) {
+    fontSize -= 2;
+    ctx.font = `900 ${fontSize}px "${FONT_FAMILY}"`;
+    totalH = fontSize * 1.15 * lines.length;
+  }
+  const finalLineHeight = fontSize * 1.15;
+  const finalTotalH = finalLineHeight * lines.length;
 
-  ctx.strokeStyle = '#1a1a1a';
-  ctx.lineWidth = Math.max(3, Math.round(fontSize * 0.1));
-  ctx.lineJoin = 'round';
-  ctx.fillStyle = '#FFFFFF';
+  const centerY = boxY + boxH / 2;
+  const startY = centerY - finalTotalH / 2 + finalLineHeight / 2;
+
+  // 黒文字 (シンプル、ボックスが白なので縁取り不要)
+  ctx.fillStyle = '#1a1a1a';
 
   for (let i = 0; i < lines.length; i++) {
-    const y = startY + i * lineHeight;
-    ctx.strokeText(lines[i], W / 2, y);
+    const y = startY + i * finalLineHeight;
     ctx.fillText(lines[i], W / 2, y);
   }
   ctx.restore();
