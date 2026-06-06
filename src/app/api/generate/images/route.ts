@@ -40,26 +40,55 @@ export async function POST(req: NextRequest) {
     const generated: Array<{ id: string; kind: string; h2Index: number | null }> = [];
     const errors: Array<{ kind: string; h2Index?: number; error: string }> = [];
 
-    // 本文から h2 を抽出（headings テーブルが無い場合のフォールバック）
-    const h2TextsFromBody: string[] = [];
+    // 本文 HTML から h2 と各 h2 直下本文を抽出 (画像プロンプトのコンテキスト化のため)
+    type Section = { text: string; body: string };
+    const sectionsFromBody: Section[] = [];
+    let leadBody = '';
     if (article.bodyHtml) {
-      const re = /<h2\b[^>]*>([\s\S]*?)<\/h2>/gi;
+      const html = article.bodyHtml;
+      // 先頭〜最初の h2 までを leadBody とみなす
+      const firstH2 = html.search(/<h2\b/i);
+      const head = firstH2 > 0 ? html.slice(0, firstH2) : html.slice(0, 2000);
+      leadBody = stripTags(head).slice(0, 800);
+
+      // 各 h2 の見出しと、直下から次の h2 までの本文を切り出す
+      const h2Re = /<h2\b[^>]*>([\s\S]*?)<\/h2>/gi;
+      const matches: Array<{ text: string; start: number; end: number }> = [];
       let m: RegExpExecArray | null;
-      while ((m = re.exec(article.bodyHtml)) !== null) {
-        h2TextsFromBody.push((m[1] || '').replace(/<[^>]+>/g, '').trim());
+      while ((m = h2Re.exec(html)) !== null) {
+        matches.push({
+          text: stripTags(m[1] || ''),
+          start: m.index,
+          end: m.index + m[0].length,
+        });
+      }
+      for (let i = 0; i < matches.length; i++) {
+        const cur = matches[i];
+        const next = matches[i + 1];
+        const sectionHtml = html.slice(cur.end, next ? next.start : html.length);
+        sectionsFromBody.push({
+          text: cur.text,
+          body: stripTags(sectionHtml).slice(0, 600),
+        });
       }
     }
-    const allH2Texts = h2TextsFromBody.length > 0 ? h2TextsFromBody : article.headings.map((h) => h.text);
+
+    // headings テーブルしかない場合のフォールバック
+    const allSections: Section[] = sectionsFromBody.length > 0
+      ? sectionsFromBody
+      : article.headings.map((h) => ({ text: h.text, body: '' }));
+    const allH2Texts = allSections.map((s) => s.text);
 
     // 単独 h2 指定 or 個別 eyecatch リクエストの場合はAI最適化プロンプト生成をスキップ（高速化）
     const useOptimized = !(scope === 'h2' && h2Index !== undefined) && allH2Texts.length > 0;
     let prompts: { eyecatch: string; h2: string[] };
     if (useOptimized && (scope === 'all' || (scope === 'h2' && h2Index === undefined))) {
-      // 全体生成時はAIで最適化
+      // 全体生成時はAIで最適化 (h2 + 直下本文をコンテキストとして渡す)
       prompts = await buildOptimizedImagePrompts({
         title: article.title,
         keywords,
-        h2Texts: allH2Texts,
+        h2Sections: allSections,
+        leadBody,
       });
     } else {
       // フォールバック: テンプレート
@@ -161,6 +190,23 @@ export async function POST(req: NextRequest) {
     console.error('[images]', err);
     return NextResponse.json({ error: 'サーバー内部エラー' }, { status: 500 });
   }
+}
+
+/** HTML タグを除去してプレーンテキスト化(空白も正規化)。 */
+function stripTags(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<figure\b[\s\S]*?<\/figure>/gi, '') // 既存挿入画像を除外
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 // 記事の画像一覧取得

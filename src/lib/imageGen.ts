@@ -149,29 +149,70 @@ export async function generateImage(opts: GenerateImageOptions): Promise<Generat
 }
 
 /**
+ * h2 セクションの情報。
+ * `body` には h2 直下の本文プレーンテキスト(最大 ~600 文字)を入れる。
+ */
+export interface H2Section {
+  text: string;
+  body?: string;
+}
+
+/**
  * AI(Gemini text) で記事内容から英語の画像プロンプトを最適化生成。
  * 失敗時はフォールバック版テンプレートを返す。
+ *
+ * 旧 API (h2Texts: string[]) は下位互換として残す。
+ * 新 API は h2Sections: { text, body }[] で h2 直下本文を渡せる。
  */
 export async function buildOptimizedImagePrompts(opts: {
   title: string;
   keywords: string[];
-  h2Texts: string[];
+  /** 旧 API: h2 見出しテキストのみ。h2Sections が未指定の場合に使う。*/
+  h2Texts?: string[];
+  /** 新 API: h2 見出し + 直下本文(プレーンテキスト)。優先される。*/
+  h2Sections?: H2Section[];
+  /** 記事冒頭の本文サマリ(プレーンテキスト最大 800 字程度)。eyecatch に使う。*/
+  leadBody?: string;
 }): Promise<{ eyecatch: string; h2: string[] }> {
+  // 互換性レイヤ: h2Sections が無ければ h2Texts から生成
+  const sections: H2Section[] = opts.h2Sections && opts.h2Sections.length > 0
+    ? opts.h2Sections
+    : (opts.h2Texts || []).map((t) => ({ text: t }));
+
   const inputData = {
     title: sanitizeUserInput(opts.title),
     keywords: opts.keywords.map(sanitizeUserInput),
-    h2s: opts.h2Texts.map(sanitizeUserInput),
+    leadBody: opts.leadBody ? sanitizeUserInput(opts.leadBody).slice(0, 800) : '',
+    sections: sections.map((s) => ({
+      text: sanitizeUserInput(s.text),
+      body: s.body ? sanitizeUserInput(s.body).slice(0, 600) : '',
+    })),
   };
+  const h2Texts = inputData.sections.map((s) => s.text);
 
-  // Vertex (Gemini 3.1 Flash Image) は日本語テキストOK・インフォグラフィック向き
+  // 後方互換用に h2Texts だけのフォールバックも提供
+  const fallbackOpts = { title: opts.title, keywords: opts.keywords, h2Texts };
+
+  // 各セクションを「番号: 見出し / 本文要約」の形に整形
+  const sectionsBlock = inputData.sections
+    .map((s, i) => {
+      const head = `${i + 1}. ${s.text}`;
+      const body = s.body ? `\n   本文要約: ${s.body}` : '';
+      return head + body;
+    })
+    .join('\n');
+
+  // Vertex (Gemini Image / Nano Banana) は日本語テキストOK・インフォグラフィック向き
   if (isVertexProvider()) {
     const userPrompt = `You are an art director for a Japanese tech blog (naturaledge.jp style).
-Generate optimized prompts for Gemini 3.1 Flash Image to produce **modern flat infographic illustrations** with Japanese headline text rendered cleanly inside the image.
+Generate optimized prompts for Gemini Image (Nano Banana) to produce **modern flat infographic illustrations** with Japanese headline text rendered cleanly inside the image.
 
 Article context:
 - Title (Japanese): ${inputData.title}
 - Keywords: ${inputData.keywords.join(', ')}
-- h2 sections (Japanese): ${inputData.h2s.map((t, i) => `${i + 1}. ${t}`).join(' | ')}
+${inputData.leadBody ? `- 記事冒頭(リード): ${inputData.leadBody}\n` : ''}
+- h2 sections (Japanese, 各見出しの直下本文も併記):
+${sectionsBlock}
 
 Generate one prompt for the eyecatch hero image and one for each h2 section.
 
@@ -183,21 +224,22 @@ Generate one prompt for the eyecatch hero image and one for each h2 section.
 - Friendly, approachable Japanese tech-blog aesthetic
 - No watermark, no human faces close-up
 
-# Content rules
-- Eyecatch: capture the article's main concept with a hero illustration + the full Japanese title at top
-- Each h2: visualize the section's specific topic with a focused grid showing concrete items/concepts mentioned in the heading
-- The image MUST include the Japanese heading text exactly as given
-- Each prompt 80-150 words, very specific about layout/colors/icons
+# Content rules (重要)
+- 各 h2 の "本文要約" を必ず読み、その本文で具体的に言及されている**製品名・数値・固有の概念・チェック項目・比較軸**をイラスト/アイコン/小見出しとして画像内に反映すること
+- 単なる「リクライニング機能のアイコン」ではなく、本文で語られている「角度の数値(135度/180度等)」「具体的な選定基準(耐荷重/ロック機構等)」「対象シーン(仮眠/集中ゲーミング等)」を絵に落とし込む
+- The image MUST include the Japanese heading text exactly as given (一字一句正確に)
+- Eyecatch: 記事タイトル + リード本文の核となる主張(誰の何の悩みをどう解決するか)を1枚に
+- Each prompt 100-180 words, very specific about layout/colors/icons/labels
 
 # Output (pure JSON, no fences, no commentary)
 {
-  "eyecatch": "Create a Japanese blog header (16:9) ... include Japanese title text \\"...\\" at top ... grid of ... pastel colors ...",
+  "eyecatch": "Create a Japanese blog header (16:9) ... include Japanese title text \\"...\\" at top ... grid of N cells labeled in Japanese with \\"...\\", \\"...\\" ... pastel colors ...",
   "h2": [
-    "Create a Japanese blog section image (16:9) ... include Japanese heading \\"...\\" ... grid of N cells showing ...",
+    "Create a Japanese blog section image (16:9) ... include Japanese heading \\"...\\" ... grid of N cells, each labeled with concrete keywords from the section body like \\"...\\", \\"...\\" ...",
     ...
   ]
 }`;
-    return await tryLlmPrompts(userPrompt, opts);
+    return await tryLlmPrompts(userPrompt, fallbackOpts);
   }
 
   // Pollinations (Flux) 向け: 写真風プロンプト
@@ -207,7 +249,9 @@ Generate optimal English image prompts for Flux/Stable Diffusion that will produ
 Article context (in Japanese):
 - Title: ${inputData.title}
 - Keywords: ${inputData.keywords.join(', ')}
-- h2 sections (in order): ${inputData.h2s.map((t, i) => `${i + 1}. ${t}`).join(' | ')}
+${inputData.leadBody ? `- Lead: ${inputData.leadBody}\n` : ''}
+- h2 sections (in order, with body summary):
+${sectionsBlock}
 
 Generate one prompt for the eyecatch (hero image) and one prompt for each h2 section.
 
@@ -220,23 +264,23 @@ Generate one prompt for the eyecatch (hero image) and one prompt for each h2 sec
 - NO TEXT, NO LETTERS, NO WATERMARKS, NO TYPOGRAPHY anywhere in image
 
 # Content guidelines
-- For eyecatch: capture the article's main theme with a striking, intriguing visual that makes readers want to click
-- For each h2: visualize the specific topic of that section with a relevant scene/object/character
+- For eyecatch: capture the article's lead/thesis with a striking, intriguing visual that makes readers want to click
+- For each h2: visualize the SPECIFIC content described in that section's body summary (concrete objects/scenes/numbers mentioned)
 - Make each scene CONCRETE and PHOTOGRAPHIC (real people, real objects, real places) — NOT abstract or symbolic
 - Vary the subjects so the article doesn't feel monotonous
-- Each prompt should be 60-120 words, descriptive and specific
+- Each prompt should be 80-140 words, descriptive and specific
 
 # Output format (JSON only, no markdown fences, no explanation)
 {
   "eyecatch": "Hyper-realistic editorial photograph showing ...",
   "h2": [
-    "Hyper-realistic editorial photograph showing ... (for section 1)",
-    "Hyper-realistic editorial photograph showing ... (for section 2)",
+    "Hyper-realistic editorial photograph showing ... (for section 1, derived from its body)",
+    "Hyper-realistic editorial photograph showing ... (for section 2, derived from its body)",
     ...
   ]
 }`;
 
-  return await tryLlmPrompts(userPrompt, opts);
+  return await tryLlmPrompts(userPrompt, fallbackOpts);
 }
 
 async function tryLlmPrompts(
