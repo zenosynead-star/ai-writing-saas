@@ -1,23 +1,22 @@
 /**
- * Vertex AI Gemini Image (Nano Banana 2) クライアント
+ * Vertex AI 画像生成クライアント (Imagen + Gemini Image 両対応)
  *
- * wp-article-rewriter の VertexGeminiImageClient (Python) を TypeScript に移植。
+ * モデル名で自動的にエンドポイント形式を切替:
+ *   - imagen-*           → :predict + instances/parameters 形式 (Imagen 3/4)
+ *   - gemini-*-image     → :generateContent + contents/responseModalities 形式
  *
  * 認証: Service Account JSON → OAuth 2.0 access token → Bearer header
- * エンドポイント:
- *   POST https://{location}-aiplatform.googleapis.com/v1/
- *     projects/{project_id}/locations/{location}/publishers/google/
- *     models/{model}:generateContent
  *
- * モデル: gemini-3.1-flash-image (日本語テキスト描画が得意、~$0.04/画像)
- * Google Cloud の $300 Free Trial で実質無料利用可能。
+ * 推奨モデル:
+ *   - imagen-4.0-fast-generate-001: 最高品質、$0.04/画像、~5秒
+ *   - imagen-3.0-fast-generate-001: 高速、$0.02/画像、~3秒
+ *   - gemini-3.1-flash-image: 日本語テキスト混在 OK(対応プロジェクトのみ)
  */
 
 import { GoogleAuth, type JWTInput } from 'google-auth-library';
 
 export interface VertexImageOptions {
   prompt: string;
-  /** "16:9", "1:1", "9:16" など。Gemini-3.1 はプロンプト内で指定 */
   aspectRatio?: string;
 }
 
@@ -65,37 +64,47 @@ async function getAccessToken(): Promise<string> {
 }
 
 /**
- * Vertex AI Gemini Image で画像生成。
- * @param opts.prompt 生成プロンプト(英語または日本語可、Gemini 3.1 は両対応)
- * @param opts.aspectRatio "16:9" など(プロンプトに自動付加)
+ * モデル名から呼び出し形式を判定:
+ *   - "imagen-*"          → predict
+ *   - "gemini-*-image"    → generateContent
  */
-export async function generateVertexImage(opts: VertexImageOptions): Promise<VertexImageResult> {
+function detectModelMode(model: string): 'imagen' | 'gemini' {
+  if (/^imagen/i.test(model)) return 'imagen';
+  return 'gemini';
+}
+
+interface VertexConfig {
+  projectId: string;
+  location: string;
+  model: string;
+}
+
+function getVertexConfig(): VertexConfig {
   const projectId = (process.env.VERTEX_PROJECT_ID || '').trim();
   if (!projectId) {
     throw new VertexImageError(500, 'VERTEX_PROJECT_ID が設定されていません');
   }
-  const location = (process.env.VERTEX_LOCATION || 'us-central1').trim();
-  const model = (process.env.VERTEX_IMAGE_MODEL || 'gemini-3.1-flash-image').trim();
+  return {
+    projectId,
+    location: (process.env.VERTEX_LOCATION || 'us-central1').trim(),
+    model: (process.env.VERTEX_IMAGE_MODEL || 'imagen-4.0-fast-generate-001').trim(),
+  };
+}
 
+async function callVertex(
+  cfg: VertexConfig,
+  endpoint: 'predict' | 'generateContent',
+  body: unknown,
+): Promise<Response> {
   const token = await getAccessToken();
   const url =
-    `https://${location}-aiplatform.googleapis.com/v1` +
-    `/projects/${projectId}/locations/${location}` +
-    `/publishers/google/models/${model}:generateContent`;
-
-  const aspect = opts.aspectRatio || '16:9';
-  const text = `${opts.prompt}\n\nAspect ratio: ${aspect}.`;
-
-  const body = {
-    contents: [{ role: 'user', parts: [{ text }] }],
-    generationConfig: { responseModalities: ['IMAGE'] },
-  };
-
+    `https://${cfg.location}-aiplatform.googleapis.com/v1` +
+    `/projects/${cfg.projectId}/locations/${cfg.location}` +
+    `/publishers/google/models/${cfg.model}:${endpoint}`;
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), 120_000);
-  let resp: Response;
   try {
-    resp = await fetch(url, {
+    return await fetch(url, {
       method: 'POST',
       signal: ac.signal,
       headers: {
@@ -104,35 +113,112 @@ export async function generateVertexImage(opts: VertexImageOptions): Promise<Ver
       },
       body: JSON.stringify(body),
     });
-  } catch (e) {
+  } finally {
     clearTimeout(timer);
+  }
+}
+
+/**
+ * Imagen (predict) 形式での画像生成。
+ * Gemini Image とリクエスト/レスポンス形式が違うので別関数。
+ */
+async function generateImagenViaPredict(
+  cfg: VertexConfig,
+  opts: VertexImageOptions,
+): Promise<VertexImageResult> {
+  const body = {
+    instances: [{ prompt: opts.prompt }],
+    parameters: {
+      sampleCount: 1,
+      aspectRatio: opts.aspectRatio || '16:9',
+      safetyFilter: 'block_only_high',
+    },
+  };
+  let resp: Response;
+  try {
+    resp = await callVertex(cfg, 'predict', body);
+  } catch (e) {
     const err = e as Error;
     if (err.name === 'AbortError') {
-      throw new VertexImageError(408, `Vertex Gemini Image タイムアウト（120秒）`);
+      throw new VertexImageError(408, 'Imagen タイムアウト（120秒）');
     }
-    throw new VertexImageError(500, `Vertex Gemini Image 接続失敗: ${err.message}`);
+    throw new VertexImageError(500, `Imagen 接続失敗: ${err.message}`);
   }
-  clearTimeout(timer);
-
   if (!resp.ok) {
     const txt = await resp.text().catch(() => '');
-    throw new VertexImageError(resp.status, `Vertex Gemini Image ${resp.status}: ${txt.slice(0, 300)}`);
+    throw new VertexImageError(resp.status, `Imagen ${resp.status}: ${txt.slice(0, 300)}`);
   }
+  const data = (await resp.json()) as {
+    predictions?: Array<{
+      bytesBase64Encoded?: string;
+      mimeType?: string;
+      raiFilteredReason?: string;
+      safetyAttributes?: { blocked?: boolean };
+    }>;
+  };
+  const preds = data.predictions || [];
+  if (preds.length === 0) {
+    throw new VertexImageError(502, 'Imagen レスポンスに predictions がありません');
+  }
+  const first = preds[0];
+  if (first.raiFilteredReason || first.safetyAttributes?.blocked) {
+    throw new VertexImageError(400, `Imagen safety filter: ${first.raiFilteredReason || 'blocked'}`);
+  }
+  if (!first.bytesBase64Encoded) {
+    throw new VertexImageError(502, 'Imagen レスポンスに bytesBase64Encoded がありません');
+  }
+  return {
+    base64: first.bytesBase64Encoded,
+    mimeType: first.mimeType || 'image/png',
+    modelUsed: `vertex-${cfg.model}`,
+  };
+}
 
+/**
+ * Gemini Image (generateContent) 形式での画像生成。
+ */
+async function generateGeminiImage(
+  cfg: VertexConfig,
+  opts: VertexImageOptions,
+): Promise<VertexImageResult> {
+  const aspect = opts.aspectRatio || '16:9';
+  const text = `${opts.prompt}\n\nAspect ratio: ${aspect}.`;
+  const body = {
+    contents: [{ role: 'user', parts: [{ text }] }],
+    generationConfig: { responseModalities: ['IMAGE'] },
+  };
+  let resp: Response;
+  try {
+    resp = await callVertex(cfg, 'generateContent', body);
+  } catch (e) {
+    const err = e as Error;
+    if (err.name === 'AbortError') {
+      throw new VertexImageError(408, 'Gemini Image タイムアウト（120秒）');
+    }
+    throw new VertexImageError(500, `Gemini Image 接続失敗: ${err.message}`);
+  }
+  if (!resp.ok) {
+    const txt = await resp.text().catch(() => '');
+    throw new VertexImageError(resp.status, `Gemini Image ${resp.status}: ${txt.slice(0, 300)}`);
+  }
   const data = (await resp.json()) as {
     promptFeedback?: { blockReason?: string };
     candidates?: Array<{
       finishReason?: string;
-      content?: { parts?: Array<{ inline_data?: { data: string; mime_type: string }; inlineData?: { data: string; mimeType: string } }> };
+      content?: {
+        parts?: Array<{
+          inline_data?: { data: string; mime_type: string };
+          inlineData?: { data: string; mimeType: string };
+        }>;
+      };
     }>;
   };
-
   if (data.promptFeedback?.blockReason) {
     throw new VertexImageError(400, `safety block: ${data.promptFeedback.blockReason}`);
   }
   const candidates = data.candidates || [];
   if (candidates.length === 0) {
-    throw new VertexImageError(502, 'Vertex Gemini Image レスポンスに candidates がありません');
+    throw new VertexImageError(502, 'Gemini Image レスポンスに candidates がありません');
   }
   const first = candidates[0];
   if (first.finishReason && ['SAFETY', 'RECITATION', 'BLOCKLIST', 'PROHIBITED_CONTENT'].includes(first.finishReason)) {
@@ -146,8 +232,17 @@ export async function generateVertexImage(opts: VertexImageOptions): Promise<Ver
         (inline as { mime_type?: string }).mime_type ||
         (inline as { mimeType?: string }).mimeType ||
         'image/png';
-      return { base64: inline.data, mimeType: mime, modelUsed: `vertex-${model}` };
+      return { base64: inline.data, mimeType: mime, modelUsed: `vertex-${cfg.model}` };
     }
   }
-  throw new VertexImageError(502, 'Vertex Gemini Image レスポンスに inline_data が無い');
+  throw new VertexImageError(502, 'Gemini Image レスポンスに inline_data が無い');
+}
+
+export async function generateVertexImage(opts: VertexImageOptions): Promise<VertexImageResult> {
+  const cfg = getVertexConfig();
+  const mode = detectModelMode(cfg.model);
+  if (mode === 'imagen') {
+    return generateImagenViaPredict(cfg, opts);
+  }
+  return generateGeminiImage(cfg, opts);
 }
