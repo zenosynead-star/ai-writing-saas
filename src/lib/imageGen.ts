@@ -131,18 +131,35 @@ export async function generateImage(opts: GenerateImageOptions): Promise<Generat
     (process.env.IMAGE_PROVIDER as 'vertex' | 'pollinations' | 'gemini' | undefined) ||
     'pollinations';
 
-  // Vertex 失敗時は Pollinations にフォールバック(可用性優先)
+  // Vertex: 429/503/500+ は指数バックオフでリトライ、400(safety) のみ Pollinations フォールバック
   if (provider === 'vertex') {
-    try {
-      const r = await generateVertexImage({ prompt: opts.prompt, aspectRatio: opts.aspectRatio });
-      return { base64: r.base64, mimeType: r.mimeType, modelUsed: r.modelUsed };
-    } catch (e) {
-      if (e instanceof VertexImageError && (e.statusCode === 400 || e.statusCode === 408 || e.statusCode === 429 || e.statusCode >= 500)) {
-        console.warn('[imageGen] Vertex 失敗 → Pollinations にフォールバック:', e.message);
-        return generateWithPollinations(opts);
+    const maxAttempts = 5;
+    let lastErr: unknown = null;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        const r = await generateVertexImage({ prompt: opts.prompt, aspectRatio: opts.aspectRatio });
+        return { base64: r.base64, mimeType: r.mimeType, modelUsed: r.modelUsed };
+      } catch (e) {
+        lastErr = e;
+        if (e instanceof VertexImageError) {
+          // 429 / 503 / 500+ / 408 → リトライ
+          const retryable = e.statusCode === 429 || e.statusCode === 503 || e.statusCode === 408 || e.statusCode === 500 || e.statusCode === 502 || e.statusCode === 504;
+          if (retryable && attempt < maxAttempts - 1) {
+            const wait = 4000 * Math.pow(1.8, attempt) + Math.random() * 1000; // 4s, 7.2s, 12.9s, 23.3s (+jitter)
+            console.warn(`[imageGen] Vertex ${e.statusCode} retry ${attempt + 1}/${maxAttempts} in ${Math.round(wait)}ms: ${e.message.slice(0, 100)}`);
+            await new Promise((r) => setTimeout(r, wait));
+            continue;
+          }
+          // 400 (safety block 等) は Pollinations にフォールバック (画像は得る、テキストは諦める)
+          if (e.statusCode === 400) {
+            console.warn('[imageGen] Vertex 400 (safety?) → Pollinations フォールバック:', e.message.slice(0, 100));
+            return generateWithPollinations(opts);
+          }
+        }
+        throw e;
       }
-      throw e;
     }
+    throw lastErr ?? new ImageGenError(500, 'Vertex unknown failure');
   }
   if (provider === 'gemini') return generateWithGemini(opts);
   return generateWithPollinations(opts);
