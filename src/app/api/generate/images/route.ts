@@ -79,11 +79,11 @@ export async function POST(req: NextRequest) {
       : article.headings.map((h) => ({ text: h.text, body: '' }));
     const allH2Texts = allSections.map((s) => s.text);
 
-    // 単独 h2 指定 or 個別 eyecatch リクエストの場合はAI最適化プロンプト生成をスキップ（高速化）
-    const useOptimized = !(scope === 'h2' && h2Index !== undefined) && allH2Texts.length > 0;
+    // 個別 h2 指定でも AI 最適化プロンプトを使う(本文反映のため)
+    // 全 h2 のコンテキストで一括計算して、指定 index だけ使う方式
+    const useOptimized = allH2Texts.length > 0;
     let prompts: { eyecatch: string; h2: string[] };
-    if (useOptimized && (scope === 'all' || (scope === 'h2' && h2Index === undefined))) {
-      // 全体生成時はAIで最適化 (h2 + 直下本文をコンテキストとして渡す)
+    if (useOptimized) {
       prompts = await buildOptimizedImagePrompts({
         title: article.title,
         keywords,
