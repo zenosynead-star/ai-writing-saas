@@ -62,6 +62,7 @@ export async function POST(req: NextRequest) {
           headingTree: buildHeadingTreeText(article.headings),
           toneSample: article.toneSample || undefined,
           volumeSpec: article.volumeSpec || undefined,
+          cooccurrenceWords: article.cooccurrenceWords ? JSON.parse(article.cooccurrenceWords) : undefined,
         }),
         maxTokens: 16000,
         temperature: 0.65,

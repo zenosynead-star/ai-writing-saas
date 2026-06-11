@@ -1,11 +1,26 @@
 // 要件定義書 5章のプロンプト設計をTypeScript側に実装
 // 本来はDB管理(PromptTemplate)するが、初期はコード側のシードを使用
 
-export const KEYWORD_EXPLORE_PROMPT = (vars: { theme: string; language: string }) => `あなたはSEOコンサルティングの専門家です。
+export const KEYWORD_EXPLORE_PROMPT = (vars: {
+  theme: string;
+  language: string;
+  competitorTitles?: string[];
+  cooccurrenceWords?: string[];
+}) => `あなたはSEOコンサルティングの専門家です。
 以下のテーマについて、SEO対策として狙う価値のある検索キーワードを20個提案してください。
 
 テーマ: ${vars.theme}
 対象言語: ${vars.language}
+${
+  vars.competitorTitles && vars.competitorTitles.length > 0
+    ? `\n# 実際の検索上位記事タイトル（このテーマで現在上位表示されている記事。狙うべきKWの実態を反映）\n${vars.competitorTitles.map((t, i) => `${i + 1}. ${t}`).join('\n')}`
+    : ''
+}
+${
+  vars.cooccurrenceWords && vars.cooccurrenceWords.length > 0
+    ? `\n# 上位記事の頻出語（共起語。関連KWの種として活用）\n${vars.cooccurrenceWords.join('、')}`
+    : ''
+}
 
 提案するキーワードの条件:
 1. 月間検索ボリュームが100以上見込まれるもの
@@ -13,6 +28,7 @@ export const KEYWORD_EXPLORE_PROMPT = (vars: { theme: string; language: string }
 3. ロングテール（3-4語の複合キーワード）を50%以上含めること
 4. 顕在ニーズと潜在ニーズの両方をカバーすること
 5. 同じ意図を持つキーワードの重複を避けること
+6. 上記の競合タイトル・共起語から読み取れる「実際に検索されている語」を反映すること
 
 出力形式（純粋なJSONのみ。前後に説明やマークダウンは付けないこと）:
 {
@@ -53,6 +69,8 @@ export const TITLE_GENERATION_PROMPT = (vars: { keywords: string[]; persona: str
 export const HEADING_GENERATION_PROMPT = (vars: {
   keywords: string[];
   competitorHeadings?: string;
+  cooccurrenceWords?: string[];
+  avgWordCount?: number;
   userCustomInstruction?: string;
 }) => `# 役割
 あなたはGoogle検索で1位を獲得する記事を作成する熟練のSEOコンサルタントです。
@@ -87,16 +105,32 @@ Googleの品質評価ガイドラインのNeeds Met基準で
 経験・専門性・権威性・信頼性を示せる見出しを含める。
 （例: 「実際に試した結果」「専門家の見解」「公的機関のデータ」等）
 
+# 競合分析の活用方針（最重要）
+${
+  vars.competitorHeadings
+    ? `以下は検索上位の競合ページから実際に抽出した見出し構成です。必ず分析し:
+- 競合の **過半数が共通して扱っているトピック** は自記事にも必ず含める（網羅性の担保）
+- 競合が **誰も扱っていない切り口・抜け** を1〜2個見つけて独自の見出しとして追加する（差別化）
+- 競合の見出しを **そのまま流用せず**、より分かりやすい表現に再構成する（Googleは多様性を評価）
+
+【競合上位ページの実見出し】
+${vars.competitorHeadings}`
+    : '競合上位ページの見出し: （取得できなかったため、検索意図から網羅的に構成すること）'
+}
+${
+  vars.cooccurrenceWords && vars.cooccurrenceWords.length > 0
+    ? `\n# 共起語（競合上位で頻出した重要語）\n以下の語は検索上位記事で繰り返し使われている重要トピックです。関連する見出しに自然に反映し、網羅性を高めてください（不自然な詰め込みは禁止）:\n${vars.cooccurrenceWords.join('、')}`
+    : ''
+}
+${vars.avgWordCount && vars.avgWordCount > 0 ? `\n# ボリューム目安\n競合上位の平均本文量は約${vars.avgWordCount}文字です。これと同等以上の網羅性を持つ見出し数にしてください。` : ''}
+
 # 出力ルール
 1. h2見出しは5〜8個。各h2の下にh3を1〜4個。必要に応じてh4も。
 2. 結論を先に求めるユーザー向けに、最初のh2は「結論」「概要」系を配置可。
 3. 最後のh2は必ず「まとめ」または相当する括り。
 4. 各見出しにキーワードを詰め込みすぎない（自然な日本語）。
 5. FAQセクションをh2として含めることを推奨（強調スニペット狙い）。
-
-# 参考情報（任意）
-${vars.competitorHeadings ? `競合上位ページの見出し: ${vars.competitorHeadings}` : '競合上位ページの見出し: （取得なし）'}
-${vars.userCustomInstruction ? `ユーザー追加指示: ${vars.userCustomInstruction}` : ''}
+${vars.userCustomInstruction ? `\n# ユーザー追加指示\n${vars.userCustomInstruction}` : ''}
 
 # 出力形式（純粋なJSONのみ。マークダウンや説明文を付けない）
 {
@@ -123,6 +157,8 @@ export const BODY_GENERATION_PROMPT = (vars: {
   headingTree: string;
   toneSample?: string;
   volumeSpec?: string;
+  cooccurrenceWords?: string[];
+  webContext?: string;
 }) => `# 役割
 あなたはSEOで上位表示される高品質な記事を書くプロのライターです。
 以下の構成と方針に従って、本文を執筆してください。
@@ -135,6 +171,16 @@ export const BODY_GENERATION_PROMPT = (vars: {
 潜在ニーズ: ${vars.latentNeeds.join('、')}
 ${vars.toneSample ? `文体サンプル: ${vars.toneSample}` : '文体: です・ます調'}
 本文量指定: ${vars.volumeSpec || '指定なし'}
+${
+  vars.cooccurrenceWords && vars.cooccurrenceWords.length > 0
+    ? `\n# 共起語（必ず自然に含める重要語）\n検索上位記事で頻出する以下の語を、文脈に合う箇所で自然に使ってください（SEOの網羅性に直結。ただし不自然な羅列は禁止）:\n${vars.cooccurrenceWords.join('、')}`
+    : ''
+}
+${
+  vars.webContext
+    ? `\n# 最新の参考情報（Web検索で取得した信頼できる情報。事実確認に活用し、古い情報や誤りを避けること）\n${vars.webContext}`
+    : ''
+}
 
 # 構成（厳守）
 ${vars.headingTree}

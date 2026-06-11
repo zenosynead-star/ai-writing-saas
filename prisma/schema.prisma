@@ -134,6 +134,7 @@ model Article {
   persona     String?
   searchIntent String?
   latentNeeds  String?  // JSON配列
+  cooccurrenceWords String? // JSON配列: 競合分析で抽出した共起語（本文生成で再利用）
   toneSample   String?
   volumeSpec   String?  // 充実 / 指定なし / 簡潔
   customInstruction String?

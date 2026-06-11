@@ -88,9 +88,33 @@ export async function fetchPage(url: string): Promise<FetchResult> {
       buf.set(c, off);
       off += c.byteLength;
     }
-    // Detect charset from content-type; fallback UTF-8
-    const charsetMatch = contentType.match(/charset=([^;]+)/i);
-    const charset = charsetMatch ? charsetMatch[1].trim().toLowerCase() : 'utf-8';
+    // charset 検出: (1) Content-Type ヘッダ → (2) HTML内の <meta charset> / http-equiv
+    // 日本語サイトは Shift_JIS / EUC-JP を meta だけで宣言することが多いため両方見る。
+    const normalizeCharset = (c: string): string => {
+      const k = c.trim().toLowerCase().replace(/["']/g, '');
+      if (/^(shift[-_]?jis|sjis|x-sjis|windows-31j|ms932|cp932)$/.test(k)) return 'shift_jis';
+      if (/^(euc[-_]?jp|x-euc-jp)$/.test(k)) return 'euc-jp';
+      if (/^(iso-2022-jp)$/.test(k)) return 'iso-2022-jp';
+      return k || 'utf-8';
+    };
+
+    const headerCharset = contentType.match(/charset=([^;]+)/i)?.[1];
+    let charset = headerCharset ? normalizeCharset(headerCharset) : '';
+
+    // ヘッダに無い or utf-8 と出ているがバイト的に怪しい場合、meta から再検出
+    if (!charset || charset === 'utf-8') {
+      // ASCII 範囲の meta タグだけ読めればよいので latin1 で先頭をプレビュー
+      const preview = new TextDecoder('latin1').decode(buf.subarray(0, 4096));
+      const metaCharset =
+        preview.match(/<meta[^>]+charset=["']?([\w-]+)/i)?.[1] ||
+        preview.match(/<meta[^>]+content=["'][^"']*charset=([\w-]+)/i)?.[1];
+      if (metaCharset) {
+        const norm = normalizeCharset(metaCharset);
+        if (norm !== 'utf-8') charset = norm;
+      }
+    }
+    if (!charset) charset = 'utf-8';
+
     let html: string;
     try {
       html = new TextDecoder(charset).decode(buf);
