@@ -14,6 +14,8 @@ const PatchSchema = z.object({
   toneSample: z.string().optional(),
   volumeSpec: z.string().optional(),
   customInstruction: z.string().optional(),
+  referenceInfo: z.string().max(8000).optional(),
+  useWebSearch: z.boolean().optional(),
   modelChoice: z.enum(['low_cost', 'balanced', 'high_quality']).optional(),
   bodyHtml: z.string().optional(),
   metaDescription: z.string().optional(),
@@ -43,7 +45,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   }
 
   const data: Record<string, unknown> = {};
-  for (const k of ['title', 'status', 'step', 'persona', 'searchIntent', 'toneSample', 'volumeSpec', 'customInstruction', 'modelChoice', 'bodyHtml', 'metaDescription']) {
+  for (const k of ['title', 'status', 'step', 'persona', 'searchIntent', 'toneSample', 'volumeSpec', 'customInstruction', 'referenceInfo', 'useWebSearch', 'modelChoice', 'bodyHtml', 'metaDescription']) {
     if ((parsed.data as Record<string, unknown>)[k] !== undefined) data[k] = (parsed.data as Record<string, unknown>)[k];
   }
   if (parsed.data.keywords) data.keywords = JSON.stringify(parsed.data.keywords);

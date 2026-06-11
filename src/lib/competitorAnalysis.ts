@@ -313,6 +313,61 @@ function formatCompetitorHeadings(parsed: Array<{ url: string; article: ParsedAr
 }
 
 /**
+ * 本文生成用の「最新情報コンテキスト」を取得する。
+ * Gemini grounding にテキスト回答を求め、その要約 + 参照ソースのタイトルを返す。
+ * Web検索 ON のときに本文プロンプトの webContext に注入する。
+ */
+export async function fetchWebContext(query: string): Promise<string> {
+  const key = process.env.GOOGLE_API_KEY || process.env.GOOGLE_API_KEY_2;
+  if (!key) return '';
+  const model = process.env.GROUNDING_MODEL || 'gemini-2.5-flash';
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+  const body = {
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          {
+            text: `「${query}」について、記事執筆の参考になる最新の事実・数値・トレンドを、信頼できる情報源に基づき箇条書きで簡潔にまとめてください。古い情報は避け、可能なら年月や具体的な数値を示してください。`,
+          },
+        ],
+      },
+    ],
+    tools: [{ google_search: {} }],
+  };
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 25_000);
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: ac.signal,
+    });
+    if (!resp.ok) return '';
+    const data = (await resp.json()) as {
+      candidates?: Array<{
+        content?: { parts?: Array<{ text?: string }> };
+        groundingMetadata?: { groundingChunks?: Array<{ web?: { title?: string } }> };
+      }>;
+    };
+    const cand = data.candidates?.[0];
+    const text = (cand?.content?.parts || []).map((p) => p.text || '').join('').trim();
+    const sources = (cand?.groundingMetadata?.groundingChunks || [])
+      .map((c) => c.web?.title)
+      .filter(Boolean)
+      .slice(0, 5);
+    if (!text) return '';
+    const srcLine = sources.length ? `\n参照: ${sources.join(' / ')}` : '';
+    return `${text}${srcLine}`.slice(0, 3000);
+  } catch {
+    return '';
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * 競合分析のメインエントリ。
  * @param query   検索クエリ（通常はターゲットKWをスペース連結したもの）
  * @param opts.maxPages 解析する最大ページ数（デフォルト6）

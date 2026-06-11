@@ -115,7 +115,7 @@ export default function Step5Body({
               .article-preview p { margin: 0.6rem 0; line-height: 1.85; }
               .article-preview ul, .article-preview ol { padding-left: 1.5rem; margin: 0.4rem 0; }
               .article-preview li { margin: 0.2rem 0; line-height: 1.7; }
-              .article-preview strong { color: #4f46e5; font-weight: 700; }
+              .article-preview strong { color: #177f72; font-weight: 700; }
               .article-preview table { border-collapse: collapse; width: 100%; margin: 0.8rem 0; }
               .article-preview th, .article-preview td { border: 1px solid #cbd5e1; padding: 0.4rem; text-align: left; }
               .article-preview th { background-color: #f1f5f9; font-weight: 600; }

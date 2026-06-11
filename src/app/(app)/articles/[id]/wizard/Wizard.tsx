@@ -18,6 +18,8 @@ export interface WizardState {
   toneSample: string;
   volumeSpec: string;
   customInstruction: string;
+  referenceInfo: string;
+  useWebSearch: boolean;
   modelChoice: 'low_cost' | 'balanced' | 'high_quality';
   headings: Array<{ id: string; level: number; text: string; parentId: string | null; order: number; bodyHtml: string | null }>;
   bodyHtml: string;
@@ -55,7 +57,10 @@ export default function Wizard({
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">記事作成ウィザード</h1>
+      <div>
+        <h1 className="text-2xl font-bold text-navy-deep">記事作成ウィザード</h1>
+        <p className="text-sm text-sub mt-1">キーワードから競合分析・SEO最適化された記事を生成します</p>
+      </div>
 
       <StepIndicator currentStep={state.step} onJump={goToStep} state={state} />
 
@@ -132,28 +137,42 @@ function StepIndicator({
   };
 
   return (
-    <div className="card p-3">
-      <div className="flex items-center justify-between gap-1">
-        {STEPS.map((s) => {
+    <div className="card p-4 md:p-5">
+      <div className="flex items-center">
+        {STEPS.map((s, i) => {
           const active = s.num === currentStep;
           const done = s.num < currentStep && canJumpTo(s.num);
           const enabled = canJumpTo(s.num);
           return (
-            <button
-              key={s.num}
-              onClick={() => enabled && onJump(s.num)}
-              disabled={!enabled}
-              className={`flex-1 px-2 py-2 rounded text-xs md:text-sm font-medium transition-colors ${
-                active
-                  ? 'bg-brand-600 text-white'
-                  : done
-                    ? 'bg-brand-100 text-brand-700 hover:bg-brand-200'
-                    : 'text-slate-500 hover:bg-slate-100 disabled:hover:bg-transparent disabled:cursor-not-allowed'
-              }`}
-            >
-              <span className="block">Step {s.num}</span>
-              <span className="block text-[10px] md:text-xs opacity-80">{s.label}</span>
-            </button>
+            <div key={s.num} className="flex items-center flex-1 last:flex-none">
+              <button
+                onClick={() => enabled && onJump(s.num)}
+                disabled={!enabled}
+                className={`flex flex-col items-center gap-1.5 group ${enabled ? 'cursor-pointer' : 'cursor-not-allowed'}`}
+              >
+                <span
+                  className={`step-dot ${
+                    active ? 'step-dot-current' : done ? 'step-dot-done' : 'step-dot-todo'
+                  }`}
+                >
+                  {done ? (
+                    <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4"><path fillRule="evenodd" d="M16.7 5.3a1 1 0 010 1.4l-7.5 7.5a1 1 0 01-1.4 0L3.3 9.7a1 1 0 011.4-1.4L8.5 12l6.8-6.8a1 1 0 011.4 0z" clipRule="evenodd" /></svg>
+                  ) : (
+                    s.num
+                  )}
+                </span>
+                <span
+                  className={`text-[10px] md:text-xs font-bold whitespace-nowrap ${
+                    active ? 'text-teal-mid' : done ? 'text-navy' : 'text-sub'
+                  }`}
+                >
+                  {s.label}
+                </span>
+              </button>
+              {i < STEPS.length - 1 && (
+                <div className={`flex-1 h-0.5 mx-1 md:mx-2 -mt-5 rounded-full ${done ? 'bg-teal' : 'bg-line'}`} />
+              )}
+            </div>
           );
         })}
       </div>

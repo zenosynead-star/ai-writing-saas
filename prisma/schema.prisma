@@ -138,6 +138,9 @@ model Article {
   toneSample   String?
   volumeSpec   String?  // 充実 / 指定なし / 簡潔
   customInstruction String?
+  referenceInfo String? // 本文生成に渡す参考情報(独自の一次情報・社内データ等)
+  useWebSearch Boolean @default(false) // 本文生成時に Web 検索で最新情報を注入するか
+  pharmaCheckJson String? // 薬機法チェック結果(JSON)
   modelChoice  String?  // low_cost / balanced / high_quality (Step4で選択、Step5で使用)
   bodyHtml     String?
   metaDescription String?

@@ -48,13 +48,18 @@ export default function ArticleEditor({
   const router = useRouter();
   const [html, setHtml] = useState(initialHtml);
   const [meta, setMeta] = useState(initialMeta);
-  const [tab, setTab] = useState<'preview' | 'html' | 'meta' | 'advice' | 'images' | 'publish'>('preview');
+  const [tab, setTab] = useState<'preview' | 'html' | 'meta' | 'advice' | 'pharma' | 'images' | 'publish'>('preview');
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [advice, setAdvice] = useState<Advice[]>(initialAdvice || []);
   const [adviceLoading, setAdviceLoading] = useState(false);
+
+  // 薬機法チェック
+  interface PharmaFinding { phrase: string; reason: string; suggestion: string; severity: string }
+  const [pharma, setPharma] = useState<{ summary: string; risk_level: string; findings: PharmaFinding[] } | null>(null);
+  const [pharmaLoading, setPharmaLoading] = useState(false);
 
   // 画像
   const [images, setImages] = useState<ArticleImageMeta[]>([]);
@@ -198,6 +203,23 @@ export default function ArticleEditor({
     finally { setAdviceLoading(false); }
   };
 
+  const runPharmaCheck = async () => {
+    setPharmaLoading(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/generate/pharma-check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ articleId }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error || '薬機法チェックに失敗しました'); return; }
+      setPharma({ summary: data.summary, risk_level: data.risk_level, findings: data.findings });
+      setTab('pharma');
+    } catch (err) { setError((err as Error).message); }
+    finally { setPharmaLoading(false); }
+  };
+
   const publishToWp = async () => {
     if (wpConns.length === 0) {
       setError('WordPress 接続が未設定です。設定 → WordPress 連携で接続してください。');
@@ -256,21 +278,22 @@ export default function ArticleEditor({
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="flex items-center gap-1 bg-white border border-slate-200 rounded p-1 overflow-x-auto max-w-full">
-          {(['preview', 'html', 'meta', 'advice', 'images', 'publish'] as const).map((t) => (
+        <div className="flex items-center gap-1 bg-white border border-line rounded-[8px] p-1 overflow-x-auto max-w-full">
+          {(['preview', 'html', 'meta', 'advice', 'pharma', 'images', 'publish'] as const).map((t) => (
             <TabButton key={t} active={tab === t} onClick={() => setTab(t)}>
               {t === 'preview' ? 'プレビュー' :
                t === 'html' ? 'HTML' :
                t === 'meta' ? 'メタ' :
                t === 'advice' ? `アドバイス${advice.length > 0 ? ` (${advice.length})` : ''}` :
+               t === 'pharma' ? '薬機法チェック' :
                t === 'images' ? `画像${images.length > 0 ? ` (${images.length})` : ''}` :
                'WordPress'}
             </TabButton>
           ))}
         </div>
         <div className="flex items-center gap-2 text-sm flex-wrap">
-          <span className="text-slate-500">{wordCount}文字</span>
-          {savedAt && <span className="text-xs text-green-600">保存済 {savedAt.toLocaleTimeString('ja-JP')}</span>}
+          <span className="text-sub">{wordCount}文字</span>
+          {savedAt && <span className="text-xs text-teal-mid">保存済 {savedAt.toLocaleTimeString('ja-JP')}</span>}
           <button onClick={save} disabled={saving} className="btn-primary text-sm">{saving ? '保存中…' : '保存'}</button>
           <button onClick={copyToClipboard} className="btn-secondary text-sm">HTMLコピー</button>
           <button onClick={exportMarkdown} className="btn-secondary text-sm">MDダウンロード</button>
@@ -304,7 +327,7 @@ export default function ArticleEditor({
             .article-preview p { margin: 0.75rem 0; line-height: 1.85; color: #1e293b; }
             .article-preview ul, .article-preview ol { padding-left: 1.5rem; margin: 0.5rem 0; }
             .article-preview li { margin: 0.25rem 0; line-height: 1.7; }
-            .article-preview strong { color: #4f46e5; font-weight: 700; }
+            .article-preview strong { color: #177f72; font-weight: 700; }
             .article-preview table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
             .article-preview th, .article-preview td { border: 1px solid #cbd5e1; padding: 0.5rem; text-align: left; }
             .article-preview th { background-color: #f1f5f9; font-weight: 600; }
@@ -347,6 +370,62 @@ export default function ArticleEditor({
             </ul>
           ) : !adviceLoading && (
             <p className="text-sm text-slate-500 text-center py-8">ボタンを押して提案を生成</p>
+          )}
+        </div>
+      )}
+
+      {tab === 'pharma' && (
+        <div className="card p-6 space-y-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <h2 className="section-title">薬機法・景表法チェック</h2>
+              <p className="text-xs text-sub mt-1">医薬品的効能・誇大表現・優良誤認の恐れがある表現を抽出し、言い換え案を提示します。</p>
+            </div>
+            <button onClick={runPharmaCheck} disabled={pharmaLoading} className="btn-primary text-sm">
+              {pharmaLoading ? 'チェック中…' : pharma ? '再チェック' : 'チェック実行'}
+            </button>
+          </div>
+          {pharmaLoading && <ProgressBar active={true} estimateSec={12} label="薬機法チェック中" />}
+          {pharma && !pharmaLoading && (
+            <>
+              <div className={`flex items-center gap-3 p-3 rounded-[8px] border ${
+                pharma.risk_level === 'high' ? 'bg-red-50 border-red-200' :
+                pharma.risk_level === 'medium' ? 'bg-amber-50 border-amber-200' :
+                'bg-teal/5 border-teal/20'
+              }`}>
+                <span className={`badge ${
+                  pharma.risk_level === 'high' ? 'bg-red-100 text-red-700' :
+                  pharma.risk_level === 'medium' ? 'bg-amber-100 text-amber-700' :
+                  'bg-teal/10 text-teal-dark'
+                }`}>
+                  リスク: {pharma.risk_level === 'high' ? '高' : pharma.risk_level === 'medium' ? '中' : '低'}
+                </span>
+                <span className="text-sm text-ink">{pharma.summary}</span>
+              </div>
+              {pharma.findings.length > 0 ? (
+                <ul className="space-y-2">
+                  {pharma.findings.map((f, i) => (
+                    <li key={i} className="border border-line rounded-[8px] p-3">
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <span className={`badge ${
+                          f.severity === 'high' ? 'bg-red-100 text-red-700' :
+                          f.severity === 'medium' ? 'bg-amber-100 text-amber-700' :
+                          'bg-line text-sub'
+                        }`}>{f.severity === 'high' ? '高' : f.severity === 'medium' ? '中' : '低'}</span>
+                        <span className="font-bold text-navy text-sm">「{f.phrase}」</span>
+                      </div>
+                      <div className="text-xs text-sub mb-1">⚠ {f.reason}</div>
+                      <div className="text-sm text-teal-dark">→ 言い換え案: {f.suggestion}</div>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-sm text-teal-dark text-center py-6">✅ 問題のある表現は検出されませんでした。</p>
+              )}
+            </>
+          )}
+          {!pharma && !pharmaLoading && (
+            <p className="text-sm text-sub text-center py-8">ボタンを押して薬機法・景表法チェックを実行</p>
           )}
         </div>
       )}
@@ -441,8 +520,8 @@ export default function ArticleEditor({
                     <button
                       key={s}
                       onClick={() => setWpStatus(s)}
-                      className={`px-4 py-2 rounded text-sm font-medium border ${
-                        wpStatus === s ? 'bg-brand-600 text-white border-brand-600' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                      className={`px-4 py-2 rounded-[5px] text-sm font-bold border ${
+                        wpStatus === s ? 'bg-teal text-white border-teal' : 'bg-white text-navy border-line hover:bg-bluepaper'
                       }`}
                     >
                       {s === 'draft' ? '下書き' : s === 'publish' ? '公開' : '予約投稿'}
@@ -472,8 +551,8 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
   return (
     <button
       onClick={onClick}
-      className={`px-3 py-1.5 rounded text-sm font-medium transition-colors whitespace-nowrap ${
-        active ? 'bg-brand-600 text-white' : 'text-slate-600 hover:bg-slate-100'
+      className={`px-3 py-1.5 rounded-[5px] text-sm font-bold transition-colors whitespace-nowrap ${
+        active ? 'bg-teal text-white' : 'text-sub hover:bg-bluepaper'
       }`}
     >
       {children}

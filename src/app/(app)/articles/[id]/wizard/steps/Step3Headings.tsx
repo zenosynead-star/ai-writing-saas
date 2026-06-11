@@ -34,6 +34,9 @@ export default function Step3Headings({
   const [searchIntent, setSearchIntent] = useState(state.searchIntent);
   const [latentNeeds, setLatentNeeds] = useState<string[]>(state.latentNeeds);
   const [customInstruction, setCustomInstruction] = useState(state.customInstruction);
+  const [useCompetitor, setUseCompetitor] = useState(true);
+  const [competitor, setCompetitor] = useState<{ sources: number; avgWordCount: number } | null>(null);
+  const [cooccurrenceWords, setCooccurrenceWords] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -44,7 +47,7 @@ export default function Step3Headings({
       const res = await fetch('/api/generate/headings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ articleId, customInstruction }),
+        body: JSON.stringify({ articleId, customInstruction, useCompetitorAnalysis: useCompetitor }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -55,6 +58,8 @@ export default function Step3Headings({
       setPersona(data.estimated_persona || '');
       setSearchIntent(data.search_intent || '');
       setLatentNeeds(data.latent_needs || []);
+      setCompetitor(data.competitor || null);
+      setCooccurrenceWords(data.cooccurrenceWords || []);
       onCreditsChange();
     } catch (err) {
       setError((err as Error).message);
@@ -187,9 +192,9 @@ export default function Step3Headings({
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-lg font-bold">ステップ 3: 見出し構成生成</h2>
-        <p className="text-sm text-slate-600 mt-1">
-          記事の品質を最も左右する工程です。E-E-A-TとNeeds Met基準に沿った構成をAIが提案します。
+        <h2 className="section-title">ステップ 3: 見出し構成生成</h2>
+        <p className="text-sm text-sub mt-2">
+          記事の品質を最も左右する工程です。競合上位の見出しを実分析し、E-E-A-TとNeeds Met基準に沿った構成をAIが提案します。
         </p>
       </div>
 
@@ -201,11 +206,56 @@ export default function Step3Headings({
           value={customInstruction}
           onChange={(e) => setCustomInstruction(e.target.value)}
         />
+        <label className="flex items-start gap-2.5 p-3 rounded-[5px] bg-bluepaper border border-teal/20 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={useCompetitor}
+            onChange={(e) => setUseCompetitor(e.target.checked)}
+            className="mt-0.5 accent-teal w-4 h-4"
+          />
+          <span className="text-sm">
+            <span className="font-bold text-navy">競合分析を使う（推奨）</span>
+            <span className="block text-xs text-sub mt-0.5">
+              検索上位サイトの見出しと共起語を実取得し、網羅性の高い構成を生成します（+10〜30秒）
+            </span>
+          </span>
+        </label>
         <button onClick={generate} disabled={loading} className="btn-primary">
           {loading ? '生成中…' : tree.length > 0 ? '見出し再生成' : 'AIで見出し生成'}
         </button>
-        {loading && <ProgressBar active={true} estimateSec={20} label="見出し構成生成中" />}
+        {loading && <ProgressBar active={true} estimateSec={useCompetitor ? 45 : 20} label={useCompetitor ? '競合分析 + 見出し構成生成中' : '見出し構成生成中'} />}
       </div>
+
+      {competitor && competitor.sources > 0 && (
+        <div className="rounded-[10px] border border-teal/20 bg-white overflow-hidden">
+          <div className="bg-teal-grad px-4 py-2.5 flex items-center gap-2">
+            <svg viewBox="0 0 20 20" fill="white" className="w-4 h-4"><path d="M10 2a8 8 0 100 16 8 8 0 000-16zM9 5h2v6H9V5zm0 8h2v2H9v-2z" /></svg>
+            <span className="text-sm font-bold text-white">競合分析の結果</span>
+          </div>
+          <div className="p-4 space-y-3">
+            <div className="flex gap-6 text-sm">
+              <div>
+                <span className="text-sub text-xs block">分析した上位サイト</span>
+                <span className="font-bold text-navy-deep text-lg">{competitor.sources}<span className="text-xs font-normal ml-0.5">件</span></span>
+              </div>
+              <div>
+                <span className="text-sub text-xs block">競合の平均文字数</span>
+                <span className="font-bold text-navy-deep text-lg">{competitor.avgWordCount.toLocaleString()}<span className="text-xs font-normal ml-0.5">字</span></span>
+              </div>
+            </div>
+            {cooccurrenceWords.length > 0 && (
+              <div>
+                <span className="text-sub text-xs block mb-1.5">上位記事の共起語（構成に反映済み）</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {cooccurrenceWords.map((w) => (
+                    <span key={w} className="chip">{w}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {(persona || searchIntent || latentNeeds.length > 0) && (
         <div className="bg-brand-50 border border-brand-200 rounded-lg p-4 text-sm space-y-2">

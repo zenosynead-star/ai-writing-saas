@@ -3,6 +3,7 @@ import { getCurrentUser } from '@/lib/auth';
 import { prisma } from '@/lib/db';
 import { generate, BASE_SYSTEM, type LogicalModel, llmErrorToResponse } from '@/lib/llm';
 import { BODY_GENERATION_PROMPT } from '@/lib/prompts';
+import { fetchWebContext } from '@/lib/competitorAnalysis';
 import { z } from 'zod';
 
 const Schema = z.object({
@@ -49,6 +50,17 @@ export async function POST(req: NextRequest) {
     await prisma.article.update({ where: { id: articleId }, data: { status: 'generating' } });
 
     try {
+      // 参考情報(ユーザー入力) + Web検索(任意)を webContext として組み立て
+      const contextParts: string[] = [];
+      if (article.referenceInfo && article.referenceInfo.trim()) {
+        contextParts.push(`【ユーザー提供の参考情報（最優先で反映）】\n${article.referenceInfo.trim()}`);
+      }
+      if (article.useWebSearch) {
+        const web = await fetchWebContext(`${article.title} ${keywords.join(' ')}`);
+        if (web) contextParts.push(`【Web検索で取得した最新情報】\n${web}`);
+      }
+      const webContext = contextParts.length > 0 ? contextParts.join('\n\n') : undefined;
+
       const result = await generate({
         logicalModel,
         taskType: 'body',
@@ -63,6 +75,7 @@ export async function POST(req: NextRequest) {
           toneSample: article.toneSample || undefined,
           volumeSpec: article.volumeSpec || undefined,
           cooccurrenceWords: article.cooccurrenceWords ? JSON.parse(article.cooccurrenceWords) : undefined,
+          webContext,
         }),
         maxTokens: 16000,
         temperature: 0.65,
