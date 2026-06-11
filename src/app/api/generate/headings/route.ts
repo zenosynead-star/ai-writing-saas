@@ -74,13 +74,28 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'AI出力の構造が想定外でした。再試行してください。' }, { status: 502 });
     }
 
-    // 共起語を Article に保存（本文生成時に再利用するため）
+    // モデルが string でなくオブジェクト/配列で返すことがあるため文字列に正規化
+    const toStr = (v: unknown, fallback: string | null): string | null => {
+      if (v == null) return fallback;
+      if (typeof v === 'string') return v;
+      if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+      try {
+        // {age,job,...} のようなオブジェクトは値を読みやすく連結
+        if (Array.isArray(v)) return v.map(String).join('、');
+        if (typeof v === 'object') return Object.values(v as Record<string, unknown>).map(String).join('、');
+        return String(v);
+      } catch {
+        return fallback;
+      }
+    };
+
+    // 共起語・ペルソナ等を Article に保存（本文生成時に再利用するため）
     await prisma.article.update({
       where: { id: articleId },
       data: {
-        persona: json.estimated_persona || article.persona,
-        searchIntent: json.search_intent || article.searchIntent,
-        latentNeeds: JSON.stringify(json.latent_needs || []),
+        persona: toStr(json.estimated_persona, article.persona),
+        searchIntent: toStr(json.search_intent, article.searchIntent),
+        latentNeeds: JSON.stringify(Array.isArray(json.latent_needs) ? json.latent_needs : []),
         cooccurrenceWords: cooccurrenceWords ? JSON.stringify(cooccurrenceWords) : null,
       },
     });

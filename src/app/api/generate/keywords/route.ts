@@ -63,9 +63,21 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'AI出力の形式が想定外でした。再試行してください。' }, { status: 502 });
     }
 
+    const renderedPrompt = KEYWORD_EXPLORE_PROMPT({
+      theme: sanitizeUserInput(theme),
+      language: user.language,
+      competitorTitles,
+      cooccurrenceWords,
+    });
     return NextResponse.json({
       keywords: json.keywords,
       competitorTitles: competitorTitles ?? [],
+      _debug: {
+        themeReceived: theme,
+        themeSanitized: sanitizeUserInput(theme),
+        promptHead: renderedPrompt.slice(0, 180),
+        actualModel: result.actualModel,
+      },
     });
   } catch (err) {
     console.error('[keywords]', err);
