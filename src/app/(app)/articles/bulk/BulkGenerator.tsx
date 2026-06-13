@@ -20,6 +20,7 @@ export default function BulkGenerator() {
   const [useCompetitor, setUseCompetitor] = useState(true);
   const [useWebSearch, setUseWebSearch] = useState(false);
   const [skipPublished, setSkipPublished] = useState(true);
+  const [parallelism, setParallelism] = useState(3);
   const [error, setError] = useState<string | null>(null);
 
   const keywords = input
@@ -79,9 +80,8 @@ export default function BulkGenerator() {
     const createdRows: Row[] = created.map((c) => ({ keyword: c.keyword, articleId: c.id, status: 'pending' }));
     setRows([...skippedRows, ...createdRows]);
 
-    // 2. 1記事ずつ順次フル生成（スキップ分は対象外。行は articleId で特定）
-    for (const item of created) {
-      const aid = item.id;
+    // 2. 複数記事を同時並列でフル生成（行は articleId で特定）
+    const genOne = async (aid: string) => {
       setRows((prev) => prev.map((r) => (r.articleId === aid ? { ...r, status: 'running' } : r)));
       try {
         const res = await fetch('/api/generate/auto', {
@@ -103,12 +103,25 @@ export default function BulkGenerator() {
       } catch (e) {
         setRows((prev) => prev.map((r) => (r.articleId === aid ? { ...r, status: 'failed', error: (e as Error).message } : r)));
       }
-    }
+    };
+
+    // concurrency 本のワーカーで created を前から順に消化（cursor は同期更新なので競合なし）
+    const concurrency = Math.max(1, Math.min(parallelism, created.length));
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < created.length) {
+        const idx = cursor;
+        cursor += 1;
+        await genOne(created[idx].id);
+      }
+    };
+    await Promise.all(Array.from({ length: concurrency }, () => worker()));
 
     setRunning(false);
   };
 
   const doneCount = rows.filter((r) => r.status === 'done').length;
+  const failedCount = rows.filter((r) => r.status === 'failed').length;
   const skippedCount = rows.filter((r) => r.status === 'skipped').length;
   const genTotal = rows.filter((r) => r.status !== 'skipped').length;
 
@@ -152,6 +165,23 @@ export default function BulkGenerator() {
               ))}
             </div>
           </div>
+          <div>
+            <span className="label">同時実行数</span>
+            <div className="flex gap-1.5">
+              {([2, 3, 4, 5] as const).map((n) => (
+                <button
+                  key={n}
+                  onClick={() => setParallelism(n)}
+                  disabled={running}
+                  className={`px-3 py-1.5 rounded-[5px] text-sm font-bold border ${
+                    parallelism === n ? 'bg-teal text-white border-teal' : 'bg-white text-navy border-line hover:bg-bluepaper'
+                  }`}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+          </div>
           <label className="flex items-center gap-2 text-sm mt-5">
             <input type="checkbox" checked={useCompetitor} onChange={(e) => setUseCompetitor(e.target.checked)} disabled={running} className="accent-teal w-4 h-4" />
             <span className="font-bold text-navy">競合分析</span>
@@ -173,7 +203,12 @@ export default function BulkGenerator() {
         </button>
         {running && (
           <p className="text-xs text-sub">
-            ※ 1記事あたり2〜4分。完了までこのタブを開いたままにしてください。
+            ※ 同時 {parallelism} 件ずつ処理（1記事2〜4分）。完了までこのタブを開いたままにしてください。
+          </p>
+        )}
+        {parallelism >= 4 && (
+          <p className="text-xs text-amber-600">
+            ※ 同時実行数が多いほど Claude の利用上限・サーバー負荷に当たりやすくなります。失敗が増えたら数を下げてください。
           </p>
         )}
         {skipPublished && !running && (
@@ -186,7 +221,9 @@ export default function BulkGenerator() {
       {rows.length > 0 && (
         <div className="card p-6">
           <h2 className="section-title mb-4">
-            生成状況（{doneCount}/{genTotal} 生成完了{skippedCount > 0 ? ` ・ ${skippedCount}件は公開済みスキップ` : ''}）
+            生成状況（{doneCount}/{genTotal} 生成完了
+            {failedCount > 0 ? ` ・ ${failedCount}件失敗` : ''}
+            {skippedCount > 0 ? ` ・ ${skippedCount}件は公開済みスキップ` : ''}）
           </h2>
           <ul className="divide-y divide-line">
             {rows.map((r, i) => (
