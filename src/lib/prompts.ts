@@ -293,6 +293,23 @@ ${vars.additionalInstruction || '（なし）'}
 - 末尾にメタディスクリプションを <!-- META: ... --> 形式で（120字以内）`;
 };
 
+export const CATEGORY_PICK_PROMPT = (vars: {
+  title: string;
+  keywords: string[];
+  categories: Array<{ id: number; name: string }>;
+}) => `あなたはWordPressメディアの編集者です。以下の記事を、既存カテゴリの中から最も適切なもの1つ（必要なら2つまで）に分類してください。
+新規カテゴリは作らず、必ず下記リストの id から選ぶこと。
+
+# 記事
+タイトル: ${vars.title}
+キーワード: ${vars.keywords.join('、')}
+
+# 既存カテゴリ（id: 名前）
+${vars.categories.map((c) => `${c.id}: ${c.name}`).join('\n')}
+
+# 出力（純粋なJSONのみ。最も適切なカテゴリidを1〜2個）
+{ "category_ids": [12], "reason": "選定理由（30字以内）" }`;
+
 export const PHARMA_CHECK_PROMPT = (vars: { articleHtml: string }) => `あなたは日本の薬機法（医薬品医療機器等法）・景品表示法に精通したコンプライアンス専門家です。
 以下の記事本文を精査し、薬機法・景表法に抵触する恐れのある表現を抽出してください。
 

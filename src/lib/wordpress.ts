@@ -103,12 +103,70 @@ export async function setMediaAltText(creds: WpCredentials, mediaId: number, alt
   });
 }
 
+export interface WpTerm {
+  id: number;
+  name: string;
+}
+
+/** 既存カテゴリ一覧を取得（最大100件） */
+export async function listCategories(creds: WpCredentials): Promise<WpTerm[]> {
+  const resp = await wpRequest(creds, '/categories?per_page=100&orderby=count&order=desc');
+  if (!resp.ok) {
+    throw new WpError(resp.status, `カテゴリ取得失敗 (HTTP ${resp.status})`);
+  }
+  const data = (await resp.json()) as Array<{ id: number; name: string }>;
+  return data.map((c) => ({ id: c.id, name: c.name }));
+}
+
+/**
+ * タグ名の配列から、対応するタグIDを返す。
+ * 既存タグがあれば再利用、無ければ新規作成する。
+ */
+export async function resolveTagIds(creds: WpCredentials, names: string[]): Promise<number[]> {
+  const ids: number[] = [];
+  for (const raw of names) {
+    const name = raw.trim();
+    if (!name) continue;
+    try {
+      // 完全一致を検索
+      const sresp = await wpRequest(creds, `/tags?search=${encodeURIComponent(name)}&per_page=20`);
+      if (sresp.ok) {
+        const found = (await sresp.json()) as Array<{ id: number; name: string }>;
+        const exact = found.find((t) => t.name === name);
+        if (exact) {
+          ids.push(exact.id);
+          continue;
+        }
+      }
+      // 無ければ作成
+      const cresp = await wpRequest(creds, '/tags', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      if (cresp.ok) {
+        const created = (await cresp.json()) as { id: number };
+        ids.push(created.id);
+      } else if (cresp.status === 400) {
+        // term_exists: レスポンスから既存IDを拾う
+        const body = (await cresp.json()) as { data?: { term_id?: number } };
+        if (body.data?.term_id) ids.push(body.data.term_id);
+      }
+    } catch {
+      // 個別タグの失敗は無視（投稿自体は続行）
+    }
+  }
+  return [...new Set(ids)];
+}
+
 export interface CreatePostInput {
   title: string;
   content: string;     // HTML
   excerpt?: string;
   status?: 'draft' | 'publish' | 'future';
   featuredMediaId?: number;
+  categories?: number[];
+  tags?: number[];
   meta?: Record<string, string>;
   date?: string;        // ISO8601 (status='future' のときの予約投稿時刻)
 }
@@ -127,6 +185,8 @@ export async function createPost(creds: WpCredentials, input: CreatePostInput): 
   };
   if (input.excerpt) body.excerpt = input.excerpt;
   if (input.featuredMediaId) body.featured_media = input.featuredMediaId;
+  if (input.categories && input.categories.length) body.categories = input.categories;
+  if (input.tags && input.tags.length) body.tags = input.tags;
   if (input.date) body.date = input.date;
 
   const resp = await wpRequest(creds, '/posts', {

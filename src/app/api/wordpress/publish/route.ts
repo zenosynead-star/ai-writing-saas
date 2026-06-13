@@ -1,8 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth';
 import { prisma } from '@/lib/db';
-import { uploadMedia, createPost, setMediaAltText, WpError, type WpCredentials } from '@/lib/wordpress';
+import {
+  uploadMedia,
+  createPost,
+  setMediaAltText,
+  listCategories,
+  resolveTagIds,
+  WpError,
+  type WpCredentials,
+} from '@/lib/wordpress';
 import { stripExistingH2Images } from '@/lib/imageEmbed';
+import { generate, extractJson, BASE_SYSTEM } from '@/lib/llm';
+import { CATEGORY_PICK_PROMPT } from '@/lib/prompts';
 import { z } from 'zod';
 
 const Schema = z.object({
@@ -94,6 +104,36 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // ===== タグ自動: 記事のターゲットKWをWPタグに =====
+    const keywords = JSON.parse(article.keywords || '[]') as string[];
+    let tagIds: number[] = [];
+    if (keywords.length > 0) {
+      tagIds = await resolveTagIds(creds, keywords).catch(() => []);
+    }
+
+    // ===== カテゴリ自動: 既存カテゴリからLLMが最適なものを選定 =====
+    let categoryIds: number[] = [];
+    try {
+      const cats = await listCategories(creds);
+      // WPデフォルトの「未分類/Uncategorized」は選択肢から除外
+      const selectable = cats.filter((c) => !/^(未分類|uncategorized)$/i.test(c.name));
+      if (selectable.length > 0) {
+        const res = await generate({
+          logicalModel: 'low_cost',
+          taskType: 'llmo_parse',
+          system: BASE_SYSTEM,
+          user: CATEGORY_PICK_PROMPT({ title: article.title, keywords, categories: selectable }),
+          maxTokens: 500,
+          jsonMode: true,
+        });
+        const picked = extractJson<{ category_ids: number[] }>(res.content);
+        const valid = new Set(selectable.map((c) => c.id));
+        categoryIds = (picked.category_ids || []).filter((id) => valid.has(id)).slice(0, 2);
+      }
+    } catch (e) {
+      console.warn('[wordpress/publish] category auto-assign skipped:', (e as Error).message);
+    }
+
     // 記事投稿
     const post = await createPost(creds, {
       title: article.title,
@@ -101,6 +141,8 @@ export async function POST(req: NextRequest) {
       excerpt: article.metaDescription || undefined,
       status: status || (conn.defaultStatus as 'draft' | 'publish' | 'future'),
       featuredMediaId,
+      categories: categoryIds.length ? categoryIds : undefined,
+      tags: tagIds.length ? tagIds : undefined,
       date: publishAt,
     });
 
@@ -114,6 +156,8 @@ export async function POST(req: NextRequest) {
       postId: post.id,
       link: post.link,
       status: post.status,
+      tagsSet: tagIds.length,
+      categoriesSet: categoryIds.length,
     });
   } catch (err) {
     if (err instanceof WpError) {
