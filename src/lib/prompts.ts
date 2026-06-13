@@ -159,6 +159,7 @@ export const BODY_GENERATION_PROMPT = (vars: {
   volumeSpec?: string;
   cooccurrenceWords?: string[];
   webContext?: string;
+  relatedArticles?: Array<{ id: string; title: string }>;
 }) => `# 役割
 あなたはSEOで上位表示される高品質な記事を書くプロのライターです。
 以下の構成と方針に従って、本文を執筆してください。
@@ -179,6 +180,11 @@ ${
 ${
   vars.webContext
     ? `\n# 最新の参考情報（Web検索で取得した信頼できる情報。事実確認に活用し、古い情報や誤りを避けること）\n${vars.webContext}`
+    : ''
+}
+${
+  vars.relatedArticles && vars.relatedArticles.length > 0
+    ? `\n# 内部リンク（関連記事への発リンク。SEOの回遊性向上に必須）\n以下は同サイトの既存記事です。本文の文脈に自然に合うものを2〜4本選び、該当箇所に内部リンクを挿入してください。\n形式: <a href="/articles/{id}">記事タイトルに沿った自然なアンカーテキスト</a>\n- 無理に全部使わず、文脈が合うものだけ。同じ記事へのリンクは1回まで。\n- アンカーテキストは「こちら」等ではなく内容が分かる語にする。\n${vars.relatedArticles.map((a) => `  - id=${a.id} : ${a.title}`).join('\n')}`
     : ''
 }
 

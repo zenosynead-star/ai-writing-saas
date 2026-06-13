@@ -61,6 +61,15 @@ export async function POST(req: NextRequest) {
       }
       const webContext = contextParts.length > 0 ? contextParts.join('\n\n') : undefined;
 
+      // 内部リンク用: 同ユーザーの他記事(完了済み優先)を最大20件
+      const siblings = await prisma.article.findMany({
+        where: { userId: user.id, id: { not: articleId }, title: { not: '' } },
+        select: { id: true, title: true },
+        orderBy: [{ status: 'asc' }, { updatedAt: 'desc' }],
+        take: 20,
+      });
+      const relatedArticles = siblings.map((s) => ({ id: s.id, title: s.title }));
+
       const result = await generate({
         logicalModel,
         taskType: 'body',
@@ -76,6 +85,7 @@ export async function POST(req: NextRequest) {
           volumeSpec: article.volumeSpec || undefined,
           cooccurrenceWords: article.cooccurrenceWords ? JSON.parse(article.cooccurrenceWords) : undefined,
           webContext,
+          relatedArticles,
         }),
         maxTokens: 16000,
         temperature: 0.65,

@@ -142,6 +142,15 @@ export async function POST(req: NextRequest) {
       if (article.referenceInfo?.trim()) {
         webContext = `【ユーザー提供の参考情報（最優先）】\n${article.referenceInfo.trim()}` + (webContext ? `\n\n${webContext}` : '');
       }
+      // 内部リンク用の関連記事(他記事 最大20件)
+      const siblings = await prisma.article.findMany({
+        where: { userId: user.id, id: { not: articleId }, title: { not: '' } },
+        select: { id: true, title: true },
+        orderBy: [{ status: 'asc' }, { updatedAt: 'desc' }],
+        take: 20,
+      });
+      const relatedArticles = siblings.map((s) => ({ id: s.id, title: s.title }));
+
       const bodyRes = await generate({
         logicalModel, taskType: 'body', system: BASE_SYSTEM,
         user: BODY_GENERATION_PROMPT({
@@ -150,7 +159,7 @@ export async function POST(req: NextRequest) {
           headingTree: headingTreeToText(headJson.headings),
           toneSample: article.toneSample || undefined,
           volumeSpec: article.volumeSpec || undefined,
-          cooccurrenceWords, webContext,
+          cooccurrenceWords, webContext, relatedArticles,
         }),
         maxTokens: 16000, temperature: 0.65,
       });

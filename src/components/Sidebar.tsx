@@ -29,9 +29,17 @@ const NAV: Array<{ href: string; label: string; icon: React.ReactNode; match: (p
     ),
   },
   {
+    href: '/articles/links',
+    label: 'リンクマップ',
+    match: (p) => p.startsWith('/articles/links'),
+    icon: (
+      <svg viewBox="0 0 20 20" fill="currentColor" className="w-[18px] h-[18px]"><path d="M7.5 5a2.5 2.5 0 11.83 1.86l3.2 1.84a2.5 2.5 0 110 2.6l-3.2 1.84a2.5 2.5 0 11-.7-1.2l3.2-1.84a2.5 2.5 0 010-1.2L7.6 6.06A2.49 2.49 0 017.5 5z" /></svg>
+    ),
+  },
+  {
     href: '/articles',
     label: '記事一覧',
-    match: (p) => p === '/articles' || (p.startsWith('/articles/') && !p.includes('/wizard') && !p.startsWith('/articles/new') && !p.startsWith('/articles/bulk')),
+    match: (p) => p === '/articles' || (p.startsWith('/articles/') && !p.includes('/wizard') && !p.startsWith('/articles/new') && !p.startsWith('/articles/bulk') && !p.startsWith('/articles/links')),
     icon: (
       <svg viewBox="0 0 20 20" fill="currentColor" className="w-[18px] h-[18px]"><path d="M3 4h14v2H3V4zm0 5h14v2H3V9zm0 5h10v2H3v-2z" /></svg>
     ),
