@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 
 type RowStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
+type ImageMode = 'none' | 'eyecatch' | 'full';
 interface Row {
   keyword: string;
   articleId?: string;
@@ -21,6 +22,7 @@ export default function BulkGenerator() {
   const [useWebSearch, setUseWebSearch] = useState(false);
   const [skipPublished, setSkipPublished] = useState(true);
   const [parallelism, setParallelism] = useState(3);
+  const [imageMode, setImageMode] = useState<ImageMode>('none');
   const [error, setError] = useState<string | null>(null);
 
   const keywords = input
@@ -80,29 +82,65 @@ export default function BulkGenerator() {
     const createdRows: Row[] = created.map((c) => ({ keyword: c.keyword, articleId: c.id, status: 'pending' }));
     setRows([...skippedRows, ...createdRows]);
 
-    // 2. 複数記事を同時並列でフル生成（行は articleId で特定）
+    // 2. 複数記事を同時並列でフル生成（本文→任意で画像）。行は articleId で特定。
     const genOne = async (aid: string) => {
       setRows((prev) => prev.map((r) => (r.articleId === aid ? { ...r, status: 'running' } : r)));
+
+      // 2-1. 本文生成
+      let title: string | undefined;
       try {
         const res = await fetch('/api/generate/auto', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            articleId: aid,
-            useCompetitorAnalysis: useCompetitor,
-            useWebSearch,
-            model,
-          }),
+          body: JSON.stringify({ articleId: aid, useCompetitorAnalysis: useCompetitor, useWebSearch, model }),
         });
         const data = await res.json();
         if (!res.ok) {
           setRows((prev) => prev.map((r) => (r.articleId === aid ? { ...r, status: 'failed', error: data.error } : r)));
-        } else {
-          setRows((prev) => prev.map((r) => (r.articleId === aid ? { ...r, status: 'done', title: data.title } : r)));
+          return;
         }
+        title = data.title;
       } catch (e) {
         setRows((prev) => prev.map((r) => (r.articleId === aid ? { ...r, status: 'failed', error: (e as Error).message } : r)));
+        return;
       }
+
+      // 2-2. 画像生成（任意）。本文は完成済みなので、画像が失敗しても done 扱い＋注記にする。
+      let imgError: string | undefined;
+      if (imageMode !== 'none') {
+        // タイトルを先に反映しつつ status は running のまま（＝画像生成中）
+        setRows((prev) => prev.map((r) => (r.articleId === aid ? { ...r, title } : r)));
+        try {
+          const ir = await fetch('/api/generate/images', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ articleId: aid, scope: imageMode === 'full' ? 'all' : 'eyecatch' }),
+          });
+          const idata = (await ir.json().catch(() => ({}))) as {
+            error?: string;
+            generated?: unknown[];
+            errors?: Array<{ error?: string }>;
+          };
+          if (!ir.ok) {
+            // 致命的失敗（認証/タイトル未設定/ImageGenError 等）
+            imgError = idata.error || '画像生成に失敗しました';
+          } else if (idata.errors && idata.errors.length > 0) {
+            // 200 でも個別画像が失敗するケース（images route は部分失敗を errors[] で返す）
+            const gen = idata.generated?.length ?? 0;
+            const failed = idata.errors.length;
+            const first = idata.errors[0]?.error;
+            imgError = gen === 0 ? `生成失敗（${first || '不明なエラー'}）` : `${failed}枚失敗`;
+          }
+        } catch (e) {
+          imgError = (e as Error).message;
+        }
+      }
+
+      setRows((prev) =>
+        prev.map((r) =>
+          r.articleId === aid ? { ...r, status: 'done', title, error: imgError ? `画像: ${imgError}` : undefined } : r,
+        ),
+      );
     };
 
     // concurrency 本のワーカーで created を前から順に消化（cursor は同期更新なので競合なし）
@@ -182,6 +220,23 @@ export default function BulkGenerator() {
               ))}
             </div>
           </div>
+          <div>
+            <span className="label">画像生成</span>
+            <div className="flex gap-1.5">
+              {([['none', 'なし'], ['eyecatch', 'アイキャッチ'], ['full', 'フル']] as const).map(([v, l]) => (
+                <button
+                  key={v}
+                  onClick={() => setImageMode(v)}
+                  disabled={running}
+                  className={`px-3 py-1.5 rounded-[5px] text-sm font-bold border ${
+                    imageMode === v ? 'bg-teal text-white border-teal' : 'bg-white text-navy border-line hover:bg-bluepaper'
+                  }`}
+                >
+                  {l}
+                </button>
+              ))}
+            </div>
+          </div>
           <label className="flex items-center gap-2 text-sm mt-5">
             <input type="checkbox" checked={useCompetitor} onChange={(e) => setUseCompetitor(e.target.checked)} disabled={running} className="accent-teal w-4 h-4" />
             <span className="font-bold text-navy">競合分析</span>
@@ -203,7 +258,12 @@ export default function BulkGenerator() {
         </button>
         {running && (
           <p className="text-xs text-sub">
-            ※ 同時 {parallelism} 件ずつ処理（1記事2〜4分）。完了までこのタブを開いたままにしてください。
+            ※ 同時 {parallelism} 件ずつ処理（1記事2〜4分{imageMode !== 'none' ? ' ＋画像数分' : ''}）。完了までこのタブを開いたままにしてください。
+          </p>
+        )}
+        {imageMode !== 'none' && (
+          <p className="text-xs text-amber-600">
+            ※ 画像生成ON{imageMode === 'full' ? '（フル=アイキャッチ＋全見出し画像）' : '（アイキャッチ1枚）'}: 各記事に画像処理（数十秒〜数分）が追加され、Imagen の画像課金（約$0.04/枚）が発生する場合があります。画像ON時は同時実行数を低め（2〜3）推奨。
           </p>
         )}
         {parallelism >= 4 && (
