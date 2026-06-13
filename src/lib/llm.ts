@@ -350,7 +350,26 @@ let keyRotationCounter = 0;
  *  - 429 / 404 はリトライ不要で次のキー or モデルへ
  *  - 503 / 500 / timeout は exp backoff でリトライ
  */
-export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
+/**
+ * 全生成に「現在日付」コンテキストを自動付与し、年号を常に最新に保つ。
+ * 例: 2026年なのに 2025 を「最新」として書かせない。
+ */
+function withCurrentDateContext(opts: GenerateOptions): GenerateOptions {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = d.getMonth() + 1;
+  const dateLine =
+    `\n\n# 現在日付（厳守）\n` +
+    `本日は ${y}年${m}月 です。\n` +
+    `- 記事内で「最新」「今年」「現在」等を述べる際は必ず ${y}年 を基準にすること。\n` +
+    `- ${y - 1}年以前の年を「最新」「今年」として書かないこと。古い年号を最新であるかのように記述しない。\n` +
+    `- タイトル・見出しに年を入れる場合は ${y}年（または「${y}年最新」）とし、古い年を入れない。\n` +
+    `- 製品名・価格・市場トレンド・統計は ${y}年時点で妥当な最新情報を前提にすること。`;
+  return { ...opts, system: (opts.system || '') + dateLine };
+}
+
+export async function generate(rawOpts: GenerateOptions): Promise<GenerateResult> {
+  const opts = withCurrentDateContext(rawOpts);
   // TEXT_PROVIDER=claude のときは、Gemini API ではなくローカル Claude Code CLI を使う。
   // 503系(混雑/一時上限)は指数バックオフで最大3回リトライ。
   if ((process.env.TEXT_PROVIDER || 'gemini').toLowerCase() === 'claude') {

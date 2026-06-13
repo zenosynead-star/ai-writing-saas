@@ -21,9 +21,17 @@ const NAV: Array<{ href: string; label: string; icon: React.ReactNode; match: (p
     ),
   },
   {
+    href: '/articles/bulk',
+    label: '一括生成',
+    match: (p) => p.startsWith('/articles/bulk'),
+    icon: (
+      <svg viewBox="0 0 20 20" fill="currentColor" className="w-[18px] h-[18px]"><path d="M3 3h6v6H3V3zm8 0h6v6h-6V3zm-8 8h6v6H3v-6zm10 1.5a.5.5 0 011 0V14h1.5a.5.5 0 010 1H14v1.5a.5.5 0 01-1 0V15h-1.5a.5.5 0 010-1H13v-1.5z" /></svg>
+    ),
+  },
+  {
     href: '/articles',
     label: '記事一覧',
-    match: (p) => p === '/articles' || (p.startsWith('/articles/') && !p.includes('/wizard') && !p.startsWith('/articles/new')),
+    match: (p) => p === '/articles' || (p.startsWith('/articles/') && !p.includes('/wizard') && !p.startsWith('/articles/new') && !p.startsWith('/articles/bulk')),
     icon: (
       <svg viewBox="0 0 20 20" fill="currentColor" className="w-[18px] h-[18px]"><path d="M3 4h14v2H3V4zm0 5h14v2H3V9zm0 5h10v2H3v-2z" /></svg>
     ),

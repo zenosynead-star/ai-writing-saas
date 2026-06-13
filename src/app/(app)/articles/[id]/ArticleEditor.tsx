@@ -328,9 +328,11 @@ export default function ArticleEditor({
             .article-preview ul, .article-preview ol { padding-left: 1.5rem; margin: 0.5rem 0; }
             .article-preview li { margin: 0.25rem 0; line-height: 1.7; }
             .article-preview strong { color: #177f72; font-weight: 700; }
+            .article-preview mark { background: linear-gradient(transparent 55%, #fff6b3 55%); color: inherit; padding: 0 0.1em; font-weight: 700; }
+            .article-preview blockquote { border-left: 4px solid #20c3ac; background: #ecf3f5; margin: 1rem 0; padding: 0.75rem 1rem; border-radius: 0 6px 6px 0; color: #1a5152; }
             .article-preview table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
             .article-preview th, .article-preview td { border: 1px solid #cbd5e1; padding: 0.5rem; text-align: left; }
-            .article-preview th { background-color: #f1f5f9; font-weight: 600; }
+            .article-preview th { background-color: #ecf3f5; font-weight: 700; color: #171951; }
           `}</style>
         </div>
       )}
