@@ -1,4 +1,5 @@
 import { GoogleGenerativeAI, type GenerationConfig } from '@google/generative-ai';
+import { spawn } from 'child_process';
 
 // 要件定義書 11.2 LLMゲートウェイ設計
 // 各LLM APIを抽象化し、モデルエイリアスを管理するレイヤー
@@ -33,6 +34,14 @@ const FALLBACK_MODELS = [
   'gemini-2.5-flash-lite',
   'gemini-2.0-flash-lite',
 ];
+
+// TEXT_PROVIDER=claude のとき使う、ローカル Claude Code CLI のモデルエイリアス。
+// 自社利用: Gemini API の代わりに、サブスク認証の `claude -p` を VPS 上でシェル実行する。
+const CLAUDE_MODEL_MAP: Record<LogicalModel, string> = {
+  high_quality: process.env.CLAUDE_MODEL_HIGH || 'opus',
+  balanced: process.env.CLAUDE_MODEL_BALANCED || 'sonnet',
+  low_cost: process.env.CLAUDE_MODEL_LOW || 'sonnet',
+};
 
 /**
  * 複数のAPIキーをサポート。
@@ -255,6 +264,82 @@ async function callModelOnce(
   };
 }
 
+/**
+ * Claude Code CLI (headless `claude -p`) で生成する。
+ * VPS に Claude Code をインストールし、サブスクの長期トークン
+ * (CLAUDE_CODE_OAUTH_TOKEN) で認証して非対話実行する。
+ * 自社利用向け: Gemini API の代わりに固定費のサブスク枠で記事生成する。
+ */
+function claudeCliGenerate(opts: GenerateOptions): Promise<GenerateResult> {
+  const model = CLAUDE_MODEL_MAP[opts.logicalModel ?? 'balanced'];
+  const bin = process.env.CLAUDE_CLI_PATH || 'claude';
+  const fullPrompt =
+    (opts.system ? `${opts.system}\n\n` : '') +
+    opts.user +
+    (opts.jsonMode
+      ? '\n\n（重要: 出力は純粋なJSONのみ。前後に説明文・マークダウン・コードフェンス```を一切付けないこと。）'
+      : '');
+
+  return new Promise<GenerateResult>((resolve, reject) => {
+    const args = ['-p', '--output-format', 'json', '--model', model];
+    let child;
+    try {
+      child = spawn(bin, args, {
+        env: process.env,
+        timeout: 300_000,
+        cwd: process.env.CLAUDE_CLI_CWD || undefined,
+      });
+    } catch (e) {
+      return reject(new UpstreamError(500, false, `claude CLI 起動失敗: ${(e as Error).message}`));
+    }
+
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => (stdout += d.toString()));
+    child.stderr.on('data', (d) => (stderr += d.toString()));
+    child.on('error', (e) =>
+      reject(new UpstreamError(500, false, `claude CLI 実行失敗: ${e.message}（VPSにClaude Codeが入っているか確認）`)),
+    );
+    child.on('close', (code) => {
+      if (code !== 0) {
+        const msg = (stderr || stdout).slice(0, 300) || `claude exited code ${code}`;
+        const retryable = /limit|overload|429|503|529|timeout/i.test(msg);
+        return reject(new UpstreamError(retryable ? 503 : 502, retryable, `claude CLI エラー: ${msg}`));
+      }
+      try {
+        const env = JSON.parse(stdout) as {
+          result?: string;
+          is_error?: boolean;
+          usage?: {
+            input_tokens?: number;
+            output_tokens?: number;
+            cache_read_input_tokens?: number;
+            cache_creation_input_tokens?: number;
+          };
+        };
+        const text = typeof env.result === 'string' ? env.result : '';
+        if (env.is_error || !text) {
+          return reject(new UpstreamError(502, false, `claude 応答異常: ${stdout.slice(0, 200)}`));
+        }
+        resolve({
+          content: text,
+          actualModel: `claude-${model}`,
+          inputTokens: env.usage?.input_tokens ?? 0,
+          outputTokens: env.usage?.output_tokens ?? 0,
+          cacheReadTokens: env.usage?.cache_read_input_tokens ?? 0,
+          cacheCreationTokens: env.usage?.cache_creation_input_tokens ?? 0,
+        });
+      } catch (e) {
+        reject(new UpstreamError(502, false, `claude 応答のJSON解析失敗: ${(e as Error).message}`));
+      }
+    });
+
+    child.stdin.on('error', () => {/* EPIPE 無視 */});
+    child.stdin.write(fullPrompt);
+    child.stdin.end();
+  });
+}
+
 // プロセス起動以降のキー使用カウンタ。ローテーション開始位置として使う。
 let keyRotationCounter = 0;
 
@@ -266,6 +351,23 @@ let keyRotationCounter = 0;
  *  - 503 / 500 / timeout は exp backoff でリトライ
  */
 export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
+  // TEXT_PROVIDER=claude のときは、Gemini API ではなくローカル Claude Code CLI を使う。
+  // 503系(混雑/一時上限)は指数バックオフで最大3回リトライ。
+  if ((process.env.TEXT_PROVIDER || 'gemini').toLowerCase() === 'claude') {
+    let lastErr: unknown = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await claudeCliGenerate(opts);
+      } catch (e) {
+        lastErr = e;
+        const up = e instanceof UpstreamError ? e : null;
+        if (!up || !up.retryable) throw e;
+        await sleep(1500 * Math.pow(2, attempt)); // 1.5s, 3s, 6s
+      }
+    }
+    throw lastErr ?? new UpstreamError(500, false, 'claude 生成に失敗しました');
+  }
+
   const requested = MODEL_MAP[opts.logicalModel ?? 'balanced'];
   const tryOrder = [requested, ...FALLBACK_MODELS.filter((m) => m !== requested)];
 
