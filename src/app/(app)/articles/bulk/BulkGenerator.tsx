@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 
-type RowStatus = 'pending' | 'running' | 'done' | 'failed';
+type RowStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
 interface Row {
   keyword: string;
   articleId?: string;
@@ -19,6 +19,7 @@ export default function BulkGenerator() {
   const [model, setModel] = useState<'low_cost' | 'balanced' | 'high_quality'>('balanced');
   const [useCompetitor, setUseCompetitor] = useState(true);
   const [useWebSearch, setUseWebSearch] = useState(false);
+  const [skipPublished, setSkipPublished] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const keywords = input
@@ -34,13 +35,14 @@ export default function BulkGenerator() {
     }
     setRunning(true);
 
-    // 1. 一括で draft 記事作成
+    // 1. 一括で draft 記事作成（skipPublished=true なら公開済みの同KW記事はスキップ）
     let created: Array<{ id: string; keyword: string }> = [];
+    let skipped: Array<{ keyword: string; existingId: string; existingTitle: string }> = [];
     try {
       const res = await fetch('/api/articles/bulk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ keywords }),
+        body: JSON.stringify({ keywords, skipPublished }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -48,25 +50,45 @@ export default function BulkGenerator() {
         setRunning(false);
         return;
       }
-      created = data.created;
+      created = data.created || [];
+      skipped = data.skipped || [];
     } catch (e) {
       setError((e as Error).message);
       setRunning(false);
       return;
     }
 
-    const initial: Row[] = created.map((c) => ({ keyword: c.keyword, articleId: c.id, status: 'pending' }));
-    setRows(initial);
+    const skippedRows: Row[] = skipped.map((s) => ({
+      keyword: s.keyword,
+      articleId: s.existingId,
+      title: s.existingTitle,
+      status: 'skipped',
+    }));
 
-    // 2. 1記事ずつ順次フル生成
-    for (let i = 0; i < created.length; i++) {
-      setRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, status: 'running' } : r)));
+    if (created.length === 0) {
+      setRows(skippedRows);
+      setError(
+        skippedRows.length > 0
+          ? 'すべて公開済み（WordPress投稿済み）のため、新規生成はありませんでした。'
+          : '生成対象がありませんでした。',
+      );
+      setRunning(false);
+      return;
+    }
+
+    const createdRows: Row[] = created.map((c) => ({ keyword: c.keyword, articleId: c.id, status: 'pending' }));
+    setRows([...skippedRows, ...createdRows]);
+
+    // 2. 1記事ずつ順次フル生成（スキップ分は対象外。行は articleId で特定）
+    for (const item of created) {
+      const aid = item.id;
+      setRows((prev) => prev.map((r) => (r.articleId === aid ? { ...r, status: 'running' } : r)));
       try {
         const res = await fetch('/api/generate/auto', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            articleId: created[i].id,
+            articleId: aid,
             useCompetitorAnalysis: useCompetitor,
             useWebSearch,
             model,
@@ -74,14 +96,12 @@ export default function BulkGenerator() {
         });
         const data = await res.json();
         if (!res.ok) {
-          setRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, status: 'failed', error: data.error } : r)));
+          setRows((prev) => prev.map((r) => (r.articleId === aid ? { ...r, status: 'failed', error: data.error } : r)));
         } else {
-          setRows((prev) =>
-            prev.map((r, idx) => (idx === i ? { ...r, status: 'done', title: data.title } : r)),
-          );
+          setRows((prev) => prev.map((r) => (r.articleId === aid ? { ...r, status: 'done', title: data.title } : r)));
         }
       } catch (e) {
-        setRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, status: 'failed', error: (e as Error).message } : r)));
+        setRows((prev) => prev.map((r) => (r.articleId === aid ? { ...r, status: 'failed', error: (e as Error).message } : r)));
       }
     }
 
@@ -89,6 +109,8 @@ export default function BulkGenerator() {
   };
 
   const doneCount = rows.filter((r) => r.status === 'done').length;
+  const skippedCount = rows.filter((r) => r.status === 'skipped').length;
+  const genTotal = rows.filter((r) => r.status !== 'skipped').length;
 
   return (
     <div className="space-y-6">
@@ -138,35 +160,49 @@ export default function BulkGenerator() {
             <input type="checkbox" checked={useWebSearch} onChange={(e) => setUseWebSearch(e.target.checked)} disabled={running} className="accent-teal w-4 h-4" />
             <span className="font-bold text-navy">Web検索で最新化</span>
           </label>
+          <label className="flex items-center gap-2 text-sm mt-5">
+            <input type="checkbox" checked={skipPublished} onChange={(e) => setSkipPublished(e.target.checked)} disabled={running} className="accent-teal w-4 h-4" />
+            <span className="font-bold text-navy">公開済みはスキップ</span>
+          </label>
         </div>
 
         {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded p-3">{error}</div>}
 
         <button onClick={start} disabled={running || keywords.length === 0} className="btn-primary">
-          {running ? `生成中… (${doneCount}/${rows.length})` : `${keywords.length} 記事を一括生成`}
+          {running ? `生成中… (${doneCount}/${genTotal})` : `${keywords.length} 記事を一括生成`}
         </button>
         {running && (
           <p className="text-xs text-sub">
             ※ 1記事あたり2〜4分。完了までこのタブを開いたままにしてください。
           </p>
         )}
+        {skipPublished && !running && (
+          <p className="text-xs text-sub">
+            ※「公開済みはスキップ」ON: 同じキーワードで既に WordPress へ投稿済みの記事がある行は生成しません。
+          </p>
+        )}
       </div>
 
       {rows.length > 0 && (
         <div className="card p-6">
-          <h2 className="section-title mb-4">生成状況（{doneCount}/{rows.length} 完了）</h2>
+          <h2 className="section-title mb-4">
+            生成状況（{doneCount}/{genTotal} 生成完了{skippedCount > 0 ? ` ・ ${skippedCount}件は公開済みスキップ` : ''}）
+          </h2>
           <ul className="divide-y divide-line">
             {rows.map((r, i) => (
-              <li key={i} className="py-3 flex items-center gap-3">
+              <li key={r.articleId ?? i} className="py-3 flex items-center gap-3">
                 <StatusIcon status={r.status} />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-bold text-navy truncate">{r.title || r.keyword}</div>
                   {r.title && <div className="text-xs text-sub truncate">KW: {r.keyword}</div>}
+                  {r.status === 'skipped' && (
+                    <div className="text-xs text-amber-600">公開済み（WordPress投稿済み）のためスキップ</div>
+                  )}
                   {r.error && <div className="text-xs text-red-600">{r.error}</div>}
                 </div>
-                {r.status === 'done' && r.articleId && (
+                {(r.status === 'done' || r.status === 'skipped') && r.articleId && (
                   <Link href={`/articles/${r.articleId}`} className="text-sm font-bold text-teal-mid hover:underline shrink-0">
-                    開く →
+                    {r.status === 'skipped' ? '既存記事' : '開く'} →
                   </Link>
                 )}
               </li>
@@ -182,5 +218,6 @@ function StatusIcon({ status }: { status: RowStatus }) {
   if (status === 'done') return <span className="step-dot step-dot-done w-6 h-6 text-[10px]">✓</span>;
   if (status === 'running') return <span className="w-6 h-6 rounded-full border-2 border-teal border-t-transparent animate-spin shrink-0" />;
   if (status === 'failed') return <span className="step-dot w-6 h-6 text-[10px] bg-red-100 text-red-600">!</span>;
+  if (status === 'skipped') return <span className="step-dot w-6 h-6 text-[10px] bg-amber-100 text-amber-700">⏭</span>;
   return <span className="step-dot step-dot-todo w-6 h-6 text-[10px]">·</span>;
 }
