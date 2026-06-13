@@ -18,6 +18,9 @@ export class WpError extends Error {
   }
 }
 
+// Cloudflare/WAF が空UAリクエストを 521/403 で弾くサイトがあるため、必ず通常UAを付ける
+const WP_USER_AGENT = 'Mozilla/5.0 (compatible; ai-writing-saas/1.0; +https://write.boot-up.jp)';
+
 function authHeader(creds: WpCredentials): string {
   const token = Buffer.from(`${creds.username}:${creds.appPassword.replace(/\s+/g, '')}`).toString('base64');
   return `Basic ${token}`;
@@ -37,6 +40,7 @@ async function wpRequest(
       signal: ac.signal,
       headers: {
         Authorization: authHeader(creds),
+        'User-Agent': WP_USER_AGENT,
         ...(init.headers || {}),
       },
     });
@@ -80,6 +84,7 @@ export async function uploadMedia(creds: WpCredentials, input: UploadMediaInput)
       signal: ac.signal,
       headers: {
         Authorization: authHeader(creds),
+        'User-Agent': WP_USER_AGENT,
         'Content-Type': input.mimeType,
         'Content-Disposition': `attachment; filename="${input.filename}"`,
       },
