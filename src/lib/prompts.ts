@@ -204,12 +204,7 @@ ${
 }
 ${
   vars.commonTopics && vars.commonTopics.length > 0
-    ? `\n# 必須網羅トピック（競合が共通で扱う中核。各トピックを本文で必ず具体的に扱う）\n${vars.commonTopics.join('、')}`
-    : ''
-}
-${
-  vars.competitorHeadings
-    ? `\n# 競合上位の見出し構成（内容量・具体性で上回ること。全トピックを網羅し、競合に無い切り口も足す）\n${vars.competitorHeadings}`
+    ? `\n# 必須網羅トピック（競合が共通で扱う中核。各トピックを本文で必ず具体的に扱い、競合を上回る具体性で書く）\n${vars.commonTopics.join('、')}`
     : ''
 }
 
