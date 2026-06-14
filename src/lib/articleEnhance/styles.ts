@@ -15,6 +15,8 @@
  * 移植元: wp-article-rewriter `src/wp_article_rewriter/restyle/styles.py:235-460`
  */
 
+import { PRODUCT_CARD_CSS } from './productCards';
+
 /** 重複挿入防止マーカー（この属性を持つ <style> があれば再注入しない）。 */
 export const RESTYLE_MARKER = 'data-ne-restyle';
 
@@ -255,9 +257,9 @@ const RELATED_CARD_CSS = `
 }`;
 
 /**
- * 記事に注入する CSS 全体。Stage 3 で商品カード CSS をここに結合する。
+ * 記事に注入する CSS 全体（cv2026 + 見出し画像 + 関連カード + 商品カード v27）。
  */
-export const ARTICLE_CSS = [CV2026_CSS, HEADING_IMAGE_CSS, RELATED_CARD_CSS].join('\n');
+export const ARTICLE_CSS = [CV2026_CSS, HEADING_IMAGE_CSS, RELATED_CARD_CSS, PRODUCT_CARD_CSS].join('\n');
 
 /** `<style data-ne-restyle="auto">…</style>` を生成。 */
 export function buildStyleBlock(): string {
