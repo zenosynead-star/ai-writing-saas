@@ -1,11 +1,11 @@
 /**
  * 画像生成プロバイダー切替対応のラッパー。
  *
- * 既定(本番): Vertex AI `gemini-2.5-flash-image`（Nano Banana。wp-article-rewriter と同じ
- *   GCPプロジェクト form-collector-v2 / us-central1。日本語タイトルを画像内に描画できる）。
+ * 既定(本番): Vertex AI **Nano Banana Pro `gemini-3-pro-image-preview`**（GCPプロジェクト
+ *   form-collector-v2、**location=global 限定**。日本語タイトルを画像内に高精度描画）。
  *   失敗時は Pollinations へフォールバックして「必ず画像」を出す。
- * ※Nano Banana Pro(gemini-3-pro-image-*) と gemini-3.1-flash-image は当該プロジェクトで 404
- *   (未提供/未許可)。Pro を使うには GCP 側でモデルの有効化が必要。
+ * ※Gemini 3 系(Nano Banana Pro)は **global ロケーションのみ**（us-central1 等の地域は 404）。
+ *   無印 Nano Banana `gemini-2.5-flash-image` は us-central1/global 両対応（コード既定値）。
  * ※AI Studio 経路は `IMAGE_PROVIDER=aistudio`＋課金有効キー＋AI Studio用モデルID 指定時のみ。
  * プロンプトは wp-article-rewriter 準拠（日本語タイトルを中央に描いたアイキャッチ風イラスト）。
  */

@@ -98,8 +98,13 @@ async function callVertex(
   body: unknown,
 ): Promise<Response> {
   const token = await getAccessToken();
+  // location=global は地域プレフィックス無しのベースホスト（Gemini 3 系 = Nano Banana Pro は global 限定）
+  const host =
+    cfg.location === 'global'
+      ? 'https://aiplatform.googleapis.com'
+      : `https://${cfg.location}-aiplatform.googleapis.com`;
   const url =
-    `https://${cfg.location}-aiplatform.googleapis.com/v1` +
+    `${host}/v1` +
     `/projects/${cfg.projectId}/locations/${cfg.location}` +
     `/publishers/google/models/${cfg.model}:${endpoint}`;
   const ac = new AbortController();
