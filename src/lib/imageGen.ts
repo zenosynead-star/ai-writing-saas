@@ -1,9 +1,11 @@
 /**
  * 画像生成プロバイダー切替対応のラッパー。
  *
- * 既定(本番): AI Studio (Generative Language API) の `imagen-3.0-fast-generate-001` —
- * wp-article-rewriter の公開画像と**同一方式に統一**。失敗時は Vertex → Pollinations の順に
- * フォールバックして「必ず画像」を出す。
+ * 既定(本番): Vertex AI `imagen-3.0-fast-generate-001`（wp-article-rewriter の画像と同一モデル）。
+ * 失敗時は Pollinations へフォールバックして「必ず画像」を出す。
+ * ※`imagen-3.0-fast-*` は Vertex 専用モデルで AI Studio では 404。課金有効な AI Studio キー＋
+ *   AI Studio 用モデルID(例 `imagen-3.0-generate-002`)を `IMAGE_PROVIDER=aistudio`＋`IMAGE_MODEL` で
+ *   指定した時のみ AI Studio 経路（AI Studio→Vertex→Pollinations）を使う。
  * スタイルは wp-article-rewriter の本番プロンプト準拠（クリーンなフラット・インフォグラフィック
  * イラスト、画像内テキストなし）。旧 Imagen4 + Canvas タイトル合成方式は廃止。
  */
@@ -169,14 +171,15 @@ function errMsg(e: unknown): string {
 }
 
 /**
- * 画像生成。既定は AI Studio Imagen（wp-rewriter と同一方式）。
- * AI Studio → Vertex → Pollinations の順にフォールバックし **常に画像を返す**（「必ず画像」を担保）。
+ * 画像生成。既定は Vertex(Imagen 3 Fast) → Pollinations。
+ * `IMAGE_PROVIDER=aistudio` の時のみ AI Studio → Vertex → Pollinations のチェーン。
+ * いずれも最終的に **常に画像を返す**（「必ず画像」を担保）。
  */
 export async function generateImage(opts: GenerateImageOptions): Promise<GenerateImageResult> {
   const provider =
     opts.provider ||
     (process.env.IMAGE_PROVIDER as 'aistudio' | 'vertex' | 'pollinations' | 'gemini' | undefined) ||
-    'aistudio';
+    'vertex';
 
   if (provider === 'pollinations') return generateWithPollinations(opts);
   if (provider === 'gemini') return generateWithGemini(opts);
