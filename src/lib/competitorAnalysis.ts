@@ -2,14 +2,16 @@
  * 競合分析パイプライン（リテラ相当のSEOロジックの心臓部）。
  *
  * フロー:
- *   1. Brave Search API でターゲットKWの上位 N 件 URL を取得
+ *   1. webSearch でターゲットKWの上位 N 件 URL を取得
+ *      （DuckDuckGo Lite[キー不要・最優先] → Gemini grounding → Brave → Google CSE）
  *   2. 各ページを並列 fetchPage + parseArticle で取得・解析
  *   3. 上位サイトの見出し構造を集約（プロンプト注入用テキスト化）
  *   4. 本文・見出しから共起語（頻出キーフレーズ）を抽出
  *
  * 取得失敗・タイムアウトは握りつぶし、取れたものだけで分析する（可用性優先）。
- * Brave 無料枠は form-collector / infoproduct-collector と共有のため、
- * 1 記事につき検索リクエストは 1 回に抑える。
+ * 先頭の DuckDuckGo Lite はキー・課金不要なので、Brave/CSE/Gemini のクォータが
+ * 枯渇していても競合分析が機能する。Brave 無料枠は form-collector /
+ * infoproduct-collector と共有のため、1 記事につき検索リクエストは 1 回に抑える。
  */
 
 import { fetchPage } from './fetcher';
@@ -232,19 +234,80 @@ async function geminiGroundingSearch(query: string): Promise<SearchHit[] | null>
 }
 
 /**
+ * DuckDuckGo Lite（APIキー不要）で上位 URL を取得する。
+ * lite.duckduckgo.com はサーバーからでも 200 を返し、結果は uddg= リダイレクトに実URLが入る。
+ * 課金・クォータ・キー一切不要なので、Gemini/Brave/CSE が全滅でも競合分析を回せる主力にする。
+ * 広告(duckduckgo.com/y.js)・DDG内部リンクは除外。タイトルは取得ページ側(parseArticle)で補完。
+ */
+async function duckduckgoLiteSearch(query: string, count: number): Promise<SearchHit[] | null> {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 15_000);
+  try {
+    const resp = await fetch(`https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+        'Accept-Language': 'ja,en;q=0.9',
+      },
+      signal: ac.signal,
+    });
+    if (!resp.ok) {
+      console.warn(`[competitorAnalysis] DuckDuckGo lite ${resp.status}`);
+      return null;
+    }
+    const html = await resp.text();
+    const results: SearchHit[] = [];
+    const seen = new Set<string>();
+    const re = /uddg=([^&"'\s>]+)/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(html)) !== null) {
+      let url: string;
+      try {
+        url = decodeURIComponent(m[1]);
+      } catch {
+        continue;
+      }
+      let host: string;
+      try {
+        host = new URL(url).hostname;
+      } catch {
+        continue;
+      }
+      // DDG 自身（広告 y.js・内部リンク）は除外
+      if (/(^|\.)(duckduckgo\.com|duck\.com)$/i.test(host)) continue;
+      if (seen.has(url)) continue;
+      seen.add(url);
+      results.push({ url, title: '' });
+      if (results.length >= count) break;
+    }
+    return results.length > 0 ? results : null;
+  } catch (e) {
+    console.warn('[competitorAnalysis] DuckDuckGo lite fetch failed:', (e as Error).message);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * 検索プロバイダの統合エントリ。
- * Brave → Google CSE → Gemini グラウンディング の順にフォールバック。
- * 環境ごとにどれか1つでも生きていれば競合分析が機能する。
+ * DuckDuckGo Lite(キー不要・最優先) → Gemini グラウンディング → Brave → Google CSE の順にフォールバック。
+ * 先頭がキー不要のため、Gemini/Brave のクォータに依存せず競合分析が機能する。
  */
 async function webSearch(query: string, count: number): Promise<{ results: SearchHit[]; provider: string }> {
+  // キー不要・課金ゼロを最優先（Gemini/Brave 非依存）
+  const ddg = await duckduckgoLiteSearch(query, count);
+  if (ddg && ddg.length > 0) return { results: ddg, provider: 'duckduckgo' };
+
+  // 以降はキー有りのフォールバック（DDG がブロック/変更された時の保険）
+  const grounding = await geminiGroundingSearch(query);
+  if (grounding && grounding.length > 0) return { results: grounding, provider: 'gemini_grounding' };
+
   const brave = await braveSearch(query, count);
   if (brave && brave.length > 0) return { results: brave, provider: 'brave' };
 
   const google = await googleCseSearch(query, count);
   if (google && google.length > 0) return { results: google, provider: 'google_cse' };
-
-  const grounding = await geminiGroundingSearch(query);
-  if (grounding && grounding.length > 0) return { results: grounding, provider: 'gemini_grounding' };
 
   return { results: [], provider: 'none' };
 }
