@@ -7,10 +7,10 @@
  *
  * 認証: Service Account JSON → OAuth 2.0 access token → Bearer header
  *
- * 推奨モデル:
- *   - imagen-4.0-fast-generate-001: 最高品質、$0.04/画像、~5秒
- *   - imagen-3.0-fast-generate-001: 高速、$0.02/画像、~3秒
- *   - gemini-3.1-flash-image: 日本語テキスト混在 OK(対応プロジェクトのみ)
+ * 既定モデル: gemini-3.1-flash-image (Nano Banana 2) — 日本語ネイティブ・高品質。
+ * VERTEX_IMAGE_MODEL で上書き可。imagen-* を指定すると predict 形式に自動切替:
+ *   - imagen-4.0-fast-generate-001: $0.04/画像、~5秒
+ *   - imagen-3.0-fast-generate-001: $0.02/画像、~3秒
  */
 
 import { GoogleAuth, type JWTInput } from 'google-auth-library';
@@ -87,7 +87,7 @@ function getVertexConfig(): VertexConfig {
   return {
     projectId,
     location: (process.env.VERTEX_LOCATION || 'us-central1').trim(),
-    model: (process.env.VERTEX_IMAGE_MODEL || 'imagen-4.0-fast-generate-001').trim(),
+    model: (process.env.VERTEX_IMAGE_MODEL || 'gemini-3.1-flash-image').trim(),
   };
 }
 
