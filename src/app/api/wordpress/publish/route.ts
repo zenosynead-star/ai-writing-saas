@@ -13,6 +13,7 @@ import {
 import { stripExistingH2Images } from '@/lib/imageEmbed';
 import { generate, extractJson, BASE_SYSTEM } from '@/lib/llm';
 import { CATEGORY_PICK_PROMPT, PHARMA_CHECK_PROMPT } from '@/lib/prompts';
+import { requestIndexing } from '@/lib/indexing';
 import { z } from 'zod';
 
 const Schema = z.object({
@@ -206,12 +207,21 @@ export async function POST(req: NextRequest) {
       data: { wpPostId: post.id, wpPostStatus: post.status },
     });
 
+    // 公開時のみ Google Indexing API に即通知（ソフト・失敗しても公開は成功扱い）
+    let indexRequested = false;
+    if (effectiveStatus === 'publish' && post.link) {
+      const idx = await requestIndexing(post.link);
+      indexRequested = idx.ok;
+      if (!idx.ok && !idx.skipped) console.warn('[wordpress/publish] indexing 失敗:', idx.message);
+    }
+
     return NextResponse.json({
       ok: true,
       postId: post.id,
       link: post.link,
       status: post.status,
       heldForPharma,
+      indexRequested,
       tagsSet: tagIds.length,
       categoriesSet: categoryIds.length,
     });
