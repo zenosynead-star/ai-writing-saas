@@ -221,6 +221,7 @@ export async function POST(req: NextRequest) {
         targetChars,
         expandPasses: exp.passes,
         model: bodyRes.actualModel,
+        featuredProductId,
       });
     } catch (err) {
       await prisma.article.update({ where: { id: articleId }, data: { status: 'failed' } }).catch(() => {});

@@ -138,36 +138,36 @@ async function expandBySections(opts: ExpandOptions): Promise<ExpandResult> {
     Math.ceil((opts.targetChars - plainTextLength(lead)) / sections.length),
   );
   let passes = 0;
-  const out: string[] = [];
 
-  for (const sec of sections) {
-    const cur = plainTextLength(sec);
-    if (cur >= perTarget * 0.85) {
-      out.push(sec);
-      continue;
-    }
-    try {
-      const res = await generate({
-        logicalModel: opts.logicalModel,
-        taskType: 'body',
-        system: BASE_SYSTEM,
-        user: EXPAND_SECTION_PROMPT({ title: opts.title, sectionHtml: sec, targetChars: perTarget }),
-        maxTokens: 16000,
-        temperature: 0.6,
-      });
-      const ex = stripFences(res.content);
-      // <h2> 始まりで現状より十分長い妥当な結果のみ採用（崩れ・短縮・空は破棄して原文維持）
-      if (/^<h2[\s>]/i.test(ex) && plainTextLength(ex) > cur + 50) {
-        out.push(ex);
-        passes++;
-      } else {
-        out.push(sec);
+  // セクションは独立に増補できるため並列実行する。同時起動数は llm 側の claude セマフォ
+  // (CLAUDE_MAX_CONCURRENCY) で上限制御されるため安全。直列だと「セクション数 × 1分超」で
+  // タイムアウトしやすいので、並列化で実時間を大幅短縮する（順序は Promise.all が保持）。
+  const out = await Promise.all(
+    sections.map(async (sec) => {
+      const cur = plainTextLength(sec);
+      if (cur >= perTarget * 0.85) return sec;
+      try {
+        const res = await generate({
+          logicalModel: opts.logicalModel,
+          taskType: 'body',
+          system: BASE_SYSTEM,
+          user: EXPAND_SECTION_PROMPT({ title: opts.title, sectionHtml: sec, targetChars: perTarget }),
+          maxTokens: 16000,
+          temperature: 0.6,
+        });
+        const ex = stripFences(res.content);
+        // <h2> 始まりで現状より十分長い妥当な結果のみ採用（崩れ・短縮・空は破棄して原文維持）
+        if (/^<h2[\s>]/i.test(ex) && plainTextLength(ex) > cur + 50) {
+          passes++;
+          return ex;
+        }
+        return sec;
+      } catch (e) {
+        console.warn('[bodyExpand] セクション増補失敗（現状維持）:', (e as Error).message);
+        return sec;
       }
-    } catch (e) {
-      console.warn('[bodyExpand] セクション増補失敗（現状維持）:', (e as Error).message);
-      out.push(sec);
-    }
-  }
+    }),
+  );
 
   const html = lead + out.join('');
   return { html, passes, finalChars: plainTextLength(html) };
