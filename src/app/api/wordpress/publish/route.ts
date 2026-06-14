@@ -17,6 +17,7 @@ import { CATEGORY_PICK_PROMPT, PHARMA_CHECK_PROMPT } from '@/lib/prompts';
 import { requestIndexing } from '@/lib/indexing';
 import { prependStyleBlock } from '@/lib/articleEnhance/styles';
 import { insertFunnelCards } from '@/lib/articleEnhance/relatedCards';
+import { normalizeForWpautop } from '@/lib/articleEnhance/wpautop';
 import { z } from 'zod';
 
 const Schema = z.object({
@@ -201,8 +202,10 @@ export async function POST(req: NextRequest) {
     if (enhance) {
       // 関連記事ファネル（マネーページ/中間ページへの関連カード）を挿入
       bodyHtml = insertFunnelCards(bodyHtml, { keywords, title: article.title });
-      // 最後にデザインCSS <style> を記事冒頭へ（カード類の後＝CSSが最上部に来る）
+      // デザインCSS <style> を記事冒頭へ（カード類の後＝CSSが最上部に来る）
       bodyHtml = prependStyleBlock(bodyHtml);
+      // 最後に wpautop 相当の正規化（WP の wpautop がカード/figure を <p> 化して壊すのを防ぐ・冪等）
+      bodyHtml = normalizeForWpautop(bodyHtml);
     }
 
     // 記事投稿: 既に WP 記事がある（wpPostId）なら更新、無ければ新規作成（再公開での重複を防ぐ）
