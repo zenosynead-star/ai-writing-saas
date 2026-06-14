@@ -281,12 +281,15 @@ function claudeCliGenerate(opts: GenerateOptions): Promise<GenerateResult> {
       : '');
 
   return new Promise<GenerateResult>((resolve, reject) => {
-    const args = ['-p', '--output-format', 'json', '--model', model];
+    // --max-turns 1: 純粋なテキスト生成に限定（エージェント的なツール使用ループを禁止）。
+    //   これが無いと、要求の重いプロンプトで claude がツール実行を試みて headless 環境で
+    //   停滞し（num_turns:2 / API時間ごく僅か / 実時間数分 → SIGTERM=exit143）本文生成が失敗する。
+    const args = ['-p', '--output-format', 'json', '--model', model, '--max-turns', '1'];
     let child;
     try {
       child = spawn(bin, args, {
         env: process.env,
-        timeout: 300_000,
+        timeout: 600_000,
         cwd: process.env.CLAUDE_CLI_CWD || undefined,
       });
     } catch (e) {
