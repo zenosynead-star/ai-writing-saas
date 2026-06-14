@@ -16,6 +16,7 @@ import { generate, extractJson, BASE_SYSTEM } from '@/lib/llm';
 import { CATEGORY_PICK_PROMPT, PHARMA_CHECK_PROMPT } from '@/lib/prompts';
 import { requestIndexing } from '@/lib/indexing';
 import { prependStyleBlock } from '@/lib/articleEnhance/styles';
+import { insertFunnelCards } from '@/lib/articleEnhance/relatedCards';
 import { z } from 'zod';
 
 const Schema = z.object({
@@ -198,6 +199,9 @@ export async function POST(req: NextRequest) {
     // ===== 記事品質強化: デザインCSS（cv2026）を記事冒頭に注入（公開段=sanitize後なので保持される）=====
     // Stage 2/3 で商品カード・関連記事ファネルもこの前段で bodyHtml に挿入していく。
     if (enhance) {
+      // 関連記事ファネル（マネーページ/中間ページへの関連カード）を挿入
+      bodyHtml = insertFunnelCards(bodyHtml, { keywords, title: article.title });
+      // 最後にデザインCSS <style> を記事冒頭へ（カード類の後＝CSSが最上部に来る）
       bodyHtml = prependStyleBlock(bodyHtml);
     }
 

@@ -183,10 +183,81 @@ const HEADING_IMAGE_CSS = `
   margin: 0 auto;
 }`;
 
+/** 関連記事カード v2（wp-rewriter `product_card/styles.py:_build_v26_css` 移植。accent #2563eb / arrow 橙 #ef6c00、編集記事風の淡青フラットカード）。 */
+const RELATED_CARD_CSS = `
+/* リテラ articleEnhance related-card-v2 (wpautop-safe editorial card) */
+.ne-related-card-v2 {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 16px;
+  margin: 28px 0;
+  padding: 16px;
+  border: 1px solid #dbe6f3;
+  border-left: 4px solid #2563eb;
+  border-radius: 8px;
+  background: #eaf3fe;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  overflow: hidden;
+  text-decoration: none;
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+.ne-related-card-v2:hover { box-shadow: 0 4px 14px rgba(37,99,235,0.18); transform: translateY(-2px); }
+.ne-related-card-v2__thumb { flex: 0 0 200px; max-width: 200px; aspect-ratio: 16 / 9; margin: 0; overflow: hidden; border-radius: 8px; }
+.ne-related-card-v2__thumb a { display: block; width: 100%; height: 100%; }
+.ne-related-card-v2__thumb img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform 0.3s ease; }
+.ne-related-card-v2:hover .ne-related-card-v2__thumb img { transform: scale(1.04); }
+.ne-related-card-v2__body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 6px; }
+.ne-related-card-v2__label { color: #2563eb; font-weight: 700; font-size: 0.8em; letter-spacing: 0.02em; }
+.ne-related-card-v2__title {
+  background: none !important;
+  border: none !important;
+  border-left: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  display: block !important;
+  font-size: 1.15em !important;
+  font-weight: 700 !important;
+  line-height: 1.4 !important;
+  color: #1a1a1a !important;
+}
+.ne-related-card-v2__title a { color: inherit; text-decoration: none; }
+.ne-related-card-v2:hover .ne-related-card-v2__title { color: #2563eb !important; }
+.ne-related-card-v2__desc {
+  color: #666666;
+  font-size: 0.88em;
+  line-height: 1.6;
+  margin: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.ne-related-card-v2__arrow {
+  display: inline-block;
+  align-self: flex-start;
+  background: #ef6c00;
+  color: #ffffff !important;
+  font-weight: 700;
+  font-size: 0.85em;
+  text-decoration: none !important;
+  text-align: center;
+  padding: 7px 16px;
+  border-radius: 6px;
+  margin-top: 6px;
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+.ne-related-card-v2:hover .ne-related-card-v2__arrow { background: #e65100; transform: translateX(4px); }
+.ne-related-card-v2:not(:has(.ne-related-card-v2__thumb)) { padding: 20px; }
+@media (max-width: 640px) {
+  .ne-related-card-v2 { flex-direction: column; }
+  .ne-related-card-v2__thumb { flex: 0 0 auto; max-width: 100%; width: 100%; aspect-ratio: 16 / 9; }
+}`;
+
 /**
- * 記事に注入する CSS 全体。Stage 2/3 で関連カード/商品カード CSS をここに結合する。
+ * 記事に注入する CSS 全体。Stage 3 で商品カード CSS をここに結合する。
  */
-export const ARTICLE_CSS = [CV2026_CSS, HEADING_IMAGE_CSS].join('\n');
+export const ARTICLE_CSS = [CV2026_CSS, HEADING_IMAGE_CSS, RELATED_CARD_CSS].join('\n');
 
 /** `<style data-ne-restyle="auto">…</style>` を生成。 */
 export function buildStyleBlock(): string {
