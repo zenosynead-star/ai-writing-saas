@@ -10,13 +10,13 @@ import { generate, BASE_SYSTEM, type LogicalModel } from './llm';
 import { EXPAND_BODY_PROMPT } from './prompts';
 
 /**
- * 目標文字数 = max(競合平均 ×1.3, 3500) を 5500 で上限クランプ。
- * 競合データが無くても最低 3500。上限は、1回の生成が claude CLI の 5分制限を超えない
- * 現実的な長さに抑えるため（過大な要求は生成停滞・タイムアウトの原因になる）。
+ * 目標文字数 = max(競合平均 ×1.3, 3500)、上限 50000。
+ * 競合分析の結果次第で長文（最大5万字級）を狙える。1回の生成では届かないため、
+ * expandBodyIfShort が複数回の増補で目標まで積み上げる（--max-turns 1 で各回は安定）。
  */
 export function computeTargetChars(avgWordCount?: number): number {
   const fromCompetitor = avgWordCount && avgWordCount > 0 ? Math.round(avgWordCount * 1.3) : 0;
-  return Math.min(Math.max(fromCompetitor, 3500), 5500);
+  return Math.min(Math.max(fromCompetitor, 3500), 50000);
 }
 
 /** HTML を除いたプレーン本文の文字数。 */
@@ -55,7 +55,9 @@ export async function expandBodyIfShort(opts: {
   maxPasses?: number;
 }): Promise<{ html: string; passes: number; finalChars: number }> {
   let html = opts.html;
-  const maxPasses = opts.maxPasses ?? 1; // 増補は原則1回（claude CLI 負荷/タイムアウト抑制）
+  // 目標が大きいほど増補回数を増やす（1回の生成では5万字級に届かないため）。最大8回。
+  // 目標到達 or 増補が頭打ち（+50字以下）になれば早期終了するので小さい目標では無駄打ちしない。
+  const maxPasses = opts.maxPasses ?? Math.min(8, Math.max(1, Math.ceil((opts.targetChars - 3000) / 8000)));
   let passes = 0;
 
   for (let i = 0; i < maxPasses; i++) {

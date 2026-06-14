@@ -270,7 +270,30 @@ async function callModelOnce(
  * (CLAUDE_CODE_OAUTH_TOKEN) で認証して非対話実行する。
  * 自社利用向け: Gemini API の代わりに固定費のサブスク枠で記事生成する。
  */
+// claude CLI の同時起動数を制限（VPS RAM 保護）。UI の同時実行数を 5 に上げても、
+// 実際に走る claude プロセスは最大 CLAUDE_MAX_CONCURRENCY 個までに絞り、超過分はキュー待ち。
+// 2GB RAM の VPS では claude 1プロセス ~300-400MB のため既定 3（env で調整可）。
+const CLAUDE_MAX_CONCURRENCY = Math.max(1, Number(process.env.CLAUDE_MAX_CONCURRENCY) || 3);
+let claudeActive = 0;
+const claudeWaiters: Array<() => void> = [];
+async function withClaudeSlot<T>(fn: () => Promise<T>): Promise<T> {
+  if (claudeActive >= CLAUDE_MAX_CONCURRENCY) {
+    await new Promise<void>((resolve) => claudeWaiters.push(resolve));
+  }
+  claudeActive++;
+  try {
+    return await fn();
+  } finally {
+    claudeActive--;
+    claudeWaiters.shift()?.();
+  }
+}
+
 function claudeCliGenerate(opts: GenerateOptions): Promise<GenerateResult> {
+  return withClaudeSlot(() => claudeCliGenerateInner(opts));
+}
+
+function claudeCliGenerateInner(opts: GenerateOptions): Promise<GenerateResult> {
   const model = CLAUDE_MODEL_MAP[opts.logicalModel ?? 'balanced'];
   const bin = process.env.CLAUDE_CLI_PATH || 'claude';
   const fullPrompt =
