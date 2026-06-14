@@ -5,12 +5,15 @@ import Link from 'next/link';
 
 type RowStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
 type ImageMode = 'none' | 'eyecatch' | 'full';
+type WpPublish = 'none' | 'draft' | 'publish';
 interface Row {
   keyword: string;
   articleId?: string;
   title?: string;
   status: RowStatus;
   error?: string;
+  pub?: string;
+  wpLink?: string;
 }
 
 export default function BulkGenerator() {
@@ -23,6 +26,7 @@ export default function BulkGenerator() {
   const [skipPublished, setSkipPublished] = useState(true);
   const [parallelism, setParallelism] = useState(3);
   const [imageMode, setImageMode] = useState<ImageMode>('none');
+  const [wpPublish, setWpPublish] = useState<WpPublish>('none');
   const [error, setError] = useState<string | null>(null);
 
   const keywords = input
@@ -82,7 +86,10 @@ export default function BulkGenerator() {
     const createdRows: Row[] = created.map((c) => ({ keyword: c.keyword, articleId: c.id, status: 'pending' }));
     setRows([...skippedRows, ...createdRows]);
 
-    // 2. 複数記事を同時並列でフル生成（本文→任意で画像）。行は articleId で特定。
+    // 公開する場合は画像必須なので、画像なし選択時でも最低アイキャッチを生成する
+    const effImageMode: ImageMode = wpPublish !== 'none' && imageMode === 'none' ? 'eyecatch' : imageMode;
+
+    // 2. 複数記事を同時並列で 本文 → 画像 → (任意)WordPress公開。行は articleId で特定。
     const genOne = async (aid: string) => {
       setRows((prev) => prev.map((r) => (r.articleId === aid ? { ...r, status: 'running' } : r)));
 
@@ -105,16 +112,15 @@ export default function BulkGenerator() {
         return;
       }
 
-      // 2-2. 画像生成（任意）。本文は完成済みなので、画像が失敗しても done 扱い＋注記にする。
+      // 2-2. 画像生成（本文は完成済みなので画像が失敗しても続行＋注記）
       let imgError: string | undefined;
-      if (imageMode !== 'none') {
-        // タイトルを先に反映しつつ status は running のまま（＝画像生成中）
+      if (effImageMode !== 'none') {
         setRows((prev) => prev.map((r) => (r.articleId === aid ? { ...r, title } : r)));
         try {
           const ir = await fetch('/api/generate/images', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ articleId: aid, scope: imageMode === 'full' ? 'all' : 'eyecatch' }),
+            body: JSON.stringify({ articleId: aid, scope: effImageMode === 'full' ? 'all' : 'eyecatch' }),
           });
           const idata = (await ir.json().catch(() => ({}))) as {
             error?: string;
@@ -122,10 +128,8 @@ export default function BulkGenerator() {
             errors?: Array<{ error?: string }>;
           };
           if (!ir.ok) {
-            // 致命的失敗（認証/タイトル未設定/ImageGenError 等）
             imgError = idata.error || '画像生成に失敗しました';
           } else if (idata.errors && idata.errors.length > 0) {
-            // 200 でも個別画像が失敗するケース（images route は部分失敗を errors[] で返す）
             const gen = idata.generated?.length ?? 0;
             const failed = idata.errors.length;
             const first = idata.errors[0]?.error;
@@ -136,9 +140,46 @@ export default function BulkGenerator() {
         }
       }
 
+      // 2-3. WordPress公開（任意）。即公開でも薬機法リスク高はサーバ側で下書きに降格される。
+      let pub: string | undefined;
+      let wpLink: string | undefined;
+      if (wpPublish !== 'none') {
+        try {
+          const pr = await fetch('/api/wordpress/publish', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              articleId: aid,
+              status: wpPublish,
+              uploadImages: true,
+              pharmaGate: true,
+              requireImages: true,
+            }),
+          });
+          const pdata = (await pr.json().catch(() => ({}))) as {
+            error?: string;
+            status?: string;
+            link?: string;
+            heldForPharma?: boolean;
+          };
+          if (!pr.ok) {
+            pub = `公開失敗: ${pdata.error || `HTTP ${pr.status}`}`;
+          } else {
+            wpLink = pdata.link;
+            if (pdata.heldForPharma) pub = '薬機法リスク高 → 下書き保留';
+            else if (pdata.status === 'publish') pub = '公開済み';
+            else pub = pdata.status === 'draft' ? '下書き保存' : `投稿(${pdata.status})`;
+          }
+        } catch (e) {
+          pub = `公開失敗: ${(e as Error).message}`;
+        }
+      }
+
       setRows((prev) =>
         prev.map((r) =>
-          r.articleId === aid ? { ...r, status: 'done', title, error: imgError ? `画像: ${imgError}` : undefined } : r,
+          r.articleId === aid
+            ? { ...r, status: 'done', title, error: imgError ? `画像: ${imgError}` : undefined, pub, wpLink }
+            : r,
         ),
       );
     };
@@ -161,6 +202,7 @@ export default function BulkGenerator() {
   const doneCount = rows.filter((r) => r.status === 'done').length;
   const failedCount = rows.filter((r) => r.status === 'failed').length;
   const skippedCount = rows.filter((r) => r.status === 'skipped').length;
+  const publishedCount = rows.filter((r) => r.pub === '公開済み').length;
   const genTotal = rows.filter((r) => r.status !== 'skipped').length;
 
   return (
@@ -237,6 +279,23 @@ export default function BulkGenerator() {
               ))}
             </div>
           </div>
+          <div>
+            <span className="label">WordPress公開</span>
+            <div className="flex gap-1.5">
+              {([['none', 'なし'], ['draft', '下書き'], ['publish', '即公開']] as const).map(([v, l]) => (
+                <button
+                  key={v}
+                  onClick={() => setWpPublish(v)}
+                  disabled={running}
+                  className={`px-3 py-1.5 rounded-[5px] text-sm font-bold border ${
+                    wpPublish === v ? 'bg-teal text-white border-teal' : 'bg-white text-navy border-line hover:bg-bluepaper'
+                  }`}
+                >
+                  {l}
+                </button>
+              ))}
+            </div>
+          </div>
           <label className="flex items-center gap-2 text-sm mt-5">
             <input type="checkbox" checked={useCompetitor} onChange={(e) => setUseCompetitor(e.target.checked)} disabled={running} className="accent-teal w-4 h-4" />
             <span className="font-bold text-navy">競合分析</span>
@@ -258,7 +317,14 @@ export default function BulkGenerator() {
         </button>
         {running && (
           <p className="text-xs text-sub">
-            ※ 同時 {parallelism} 件ずつ処理（1記事2〜4分{imageMode !== 'none' ? ' ＋画像数分' : ''}）。完了までこのタブを開いたままにしてください。
+            ※ 同時 {parallelism} 件ずつ処理（1記事2〜4分{imageMode !== 'none' || wpPublish !== 'none' ? ' ＋画像/公開で数分追加' : ''}）。完了までこのタブを開いたままにしてください。
+          </p>
+        )}
+        {wpPublish !== 'none' && (
+          <p className="text-xs text-amber-600">
+            ※ WordPress{wpPublish === 'publish' ? '即公開' : '下書き'}ON: 本文→画像→{wpPublish === 'publish' ? '公開' : '下書き投稿'}まで自動。
+            公開には画像が必須のため、画像「なし」でもアイキャッチを自動生成します。
+            {wpPublish === 'publish' && ' 即公開でも薬機法リスク「高」の記事は自動で下書き保留にします。'}
           </p>
         )}
         {imageMode !== 'none' && (
@@ -282,6 +348,7 @@ export default function BulkGenerator() {
         <div className="card p-6">
           <h2 className="section-title mb-4">
             生成状況（{doneCount}/{genTotal} 生成完了
+            {publishedCount > 0 ? ` ・ ${publishedCount}件公開` : ''}
             {failedCount > 0 ? ` ・ ${failedCount}件失敗` : ''}
             {skippedCount > 0 ? ` ・ ${skippedCount}件は公開済みスキップ` : ''}）
           </h2>
@@ -295,11 +362,32 @@ export default function BulkGenerator() {
                   {r.status === 'skipped' && (
                     <div className="text-xs text-amber-600">公開済み（WordPress投稿済み）のためスキップ</div>
                   )}
+                  {r.pub && (
+                    <div
+                      className={`text-xs ${
+                        r.pub.startsWith('公開失敗')
+                          ? 'text-red-600'
+                          : r.pub.includes('保留')
+                            ? 'text-amber-600'
+                            : 'text-teal-mid font-bold'
+                      }`}
+                    >
+                      WP: {r.pub}
+                      {r.wpLink && (
+                        <>
+                          {' '}
+                          <a href={r.wpLink} target="_blank" rel="noopener noreferrer" className="underline">
+                            記事を見る ↗
+                          </a>
+                        </>
+                      )}
+                    </div>
+                  )}
                   {r.error && <div className="text-xs text-red-600">{r.error}</div>}
                 </div>
                 {(r.status === 'done' || r.status === 'skipped') && r.articleId && (
                   <Link href={`/articles/${r.articleId}`} className="text-sm font-bold text-teal-mid hover:underline shrink-0">
-                    {r.status === 'skipped' ? '既存記事' : '開く'} →
+                    {r.status === 'skipped' ? '既存記事' : '編集'} →
                   </Link>
                 )}
               </li>

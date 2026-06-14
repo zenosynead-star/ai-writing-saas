@@ -12,7 +12,7 @@ import {
 } from '@/lib/wordpress';
 import { stripExistingH2Images } from '@/lib/imageEmbed';
 import { generate, extractJson, BASE_SYSTEM } from '@/lib/llm';
-import { CATEGORY_PICK_PROMPT } from '@/lib/prompts';
+import { CATEGORY_PICK_PROMPT, PHARMA_CHECK_PROMPT } from '@/lib/prompts';
 import { z } from 'zod';
 
 const Schema = z.object({
@@ -23,14 +23,48 @@ const Schema = z.object({
   publishAt: z.string().optional(),
   /** 画像を WordPress にアップロード→本文の <img src> を新URLに置換するか */
   uploadImages: z.boolean().default(true),
+  /** status='publish' でも薬機法リスク high なら draft に降格して保留する */
+  pharmaGate: z.boolean().optional().default(false),
+  /** 画像が1枚も無い場合は公開を中止する（「必ず画像を入れる」運用） */
+  requireImages: z.boolean().optional().default(false),
 });
+
+/** 記事の薬機法リスクを返す ('low'|'mid'|'high'|'unknown')。既存結果を優先し、無ければ薬機法チェックを実行。 */
+async function assessPharmaRisk(articleId: string, bodyHtml: string, existing: string | null): Promise<string> {
+  if (existing) {
+    try {
+      const j = JSON.parse(existing) as { risk_level?: string };
+      if (j?.risk_level) return String(j.risk_level).toLowerCase();
+    } catch {
+      /* 壊れた既存結果は無視して再チェック */
+    }
+  }
+  try {
+    const res = await generate({
+      logicalModel: 'low_cost',
+      taskType: 'advice',
+      system: BASE_SYSTEM,
+      user: PHARMA_CHECK_PROMPT({ articleHtml: bodyHtml }),
+      maxTokens: 3000,
+      jsonMode: true,
+    });
+    const j = extractJson<{ risk_level?: string }>(res.content);
+    await prisma.article
+      .update({ where: { id: articleId }, data: { pharmaCheckJson: JSON.stringify(j) } })
+      .catch(() => {});
+    return String(j.risk_level || 'low').toLowerCase();
+  } catch (e) {
+    console.warn('[wordpress/publish] pharma-check 実行失敗 → unknown:', (e as Error).message);
+    return 'unknown';
+  }
+}
 
 export async function POST(req: NextRequest) {
   try {
     const user = await getCurrentUser();
     const parsed = Schema.safeParse(await req.json());
     if (!parsed.success) return NextResponse.json({ error: 'リクエストが不正です' }, { status: 400 });
-    const { articleId, connectionId, status, publishAt, uploadImages } = parsed.data;
+    const { articleId, connectionId, status, publishAt, uploadImages, pharmaGate, requireImages } = parsed.data;
 
     const article = await prisma.article.findFirst({
       where: { id: articleId, userId: user.id },
@@ -38,6 +72,14 @@ export async function POST(req: NextRequest) {
     });
     if (!article) return NextResponse.json({ error: 'Article not found' }, { status: 404 });
     if (!article.bodyHtml) return NextResponse.json({ error: '本文が未生成です' }, { status: 400 });
+
+    // 画像必須: 1枚も無ければ公開しない（「必ず画像を入れる」運用）
+    if (requireImages && !article.articleImages.some((i) => i.kind === 'eyecatch' || i.kind === 'h2')) {
+      return NextResponse.json(
+        { error: '画像が無いため公開を中止しました（画像を生成してから公開してください）' },
+        { status: 400 },
+      );
+    }
 
     // 接続情報取得（指定 or default）
     const conn = connectionId
@@ -134,12 +176,25 @@ export async function POST(req: NextRequest) {
       console.warn('[wordpress/publish] category auto-assign skipped:', (e as Error).message);
     }
 
+    // ===== 薬機法ゲート: 即公開希望でも risk=high なら draft に降格して保留 =====
+    let effectiveStatus: 'draft' | 'publish' | 'future' =
+      status || (conn.defaultStatus as 'draft' | 'publish' | 'future');
+    let heldForPharma = false;
+    if (pharmaGate && effectiveStatus === 'publish') {
+      const risk = await assessPharmaRisk(article.id, article.bodyHtml, article.pharmaCheckJson);
+      if (risk === 'high') {
+        effectiveStatus = 'draft';
+        heldForPharma = true;
+        console.warn(`[wordpress/publish] 薬機法リスク高 → 下書き保留 article=${articleId}`);
+      }
+    }
+
     // 記事投稿
     const post = await createPost(creds, {
       title: article.title,
       content: bodyHtml,
       excerpt: article.metaDescription || undefined,
-      status: status || (conn.defaultStatus as 'draft' | 'publish' | 'future'),
+      status: effectiveStatus,
       featuredMediaId,
       categories: categoryIds.length ? categoryIds : undefined,
       tags: tagIds.length ? tagIds : undefined,
@@ -156,6 +211,7 @@ export async function POST(req: NextRequest) {
       postId: post.id,
       link: post.link,
       status: post.status,
+      heldForPharma,
       tagsSet: tagIds.length,
       categoriesSet: categoryIds.length,
     });
