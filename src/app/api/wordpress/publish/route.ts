@@ -4,6 +4,7 @@ import { prisma } from '@/lib/db';
 import {
   uploadMedia,
   createPost,
+  updatePost,
   setMediaAltText,
   listCategories,
   resolveTagIds,
@@ -14,6 +15,7 @@ import { stripExistingH2Images } from '@/lib/imageEmbed';
 import { generate, extractJson, BASE_SYSTEM } from '@/lib/llm';
 import { CATEGORY_PICK_PROMPT, PHARMA_CHECK_PROMPT } from '@/lib/prompts';
 import { requestIndexing } from '@/lib/indexing';
+import { prependStyleBlock } from '@/lib/articleEnhance/styles';
 import { z } from 'zod';
 
 const Schema = z.object({
@@ -28,6 +30,8 @@ const Schema = z.object({
   pharmaGate: z.boolean().optional().default(false),
   /** 画像が1枚も無い場合は公開を中止する（「必ず画像を入れる」運用） */
   requireImages: z.boolean().optional().default(false),
+  /** 公開前に記事品質強化（デザインCSS/商品カード/関連記事/見出し画像）を適用するか */
+  enhance: z.boolean().optional().default(true),
 });
 
 /** 記事の薬機法リスクを返す ('low'|'mid'|'high'|'unknown')。既存結果を優先し、無ければ薬機法チェックを実行。 */
@@ -65,7 +69,8 @@ export async function POST(req: NextRequest) {
     const user = await getCurrentUser();
     const parsed = Schema.safeParse(await req.json());
     if (!parsed.success) return NextResponse.json({ error: 'リクエストが不正です' }, { status: 400 });
-    const { articleId, connectionId, status, publishAt, uploadImages, pharmaGate, requireImages } = parsed.data;
+    const { articleId, connectionId, status, publishAt, uploadImages, pharmaGate, requireImages, enhance } =
+      parsed.data;
 
     const article = await prisma.article.findFirst({
       where: { id: articleId, userId: user.id },
@@ -142,7 +147,7 @@ export async function POST(req: NextRequest) {
           h2Idx++;
           if (!up) return match;
           const safeAlt = (inner as string).replace(/<[^>]+>/g, '').trim() || up.alt;
-          return `${match}\n<figure class="wp-block-image size-large"><img src="${up.url}" alt="${safeAlt.replace(/"/g, '&quot;')}" /></figure>\n`;
+          return `${match}\n<figure class="ne-heading-image" data-ne-heading-image="auto"><img src="${up.url}" alt="${safeAlt.replace(/"/g, '&quot;')}" loading="lazy" decoding="async" /></figure>\n`;
         });
       }
     }
@@ -190,8 +195,14 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 記事投稿
-    const post = await createPost(creds, {
+    // ===== 記事品質強化: デザインCSS（cv2026）を記事冒頭に注入（公開段=sanitize後なので保持される）=====
+    // Stage 2/3 で商品カード・関連記事ファネルもこの前段で bodyHtml に挿入していく。
+    if (enhance) {
+      bodyHtml = prependStyleBlock(bodyHtml);
+    }
+
+    // 記事投稿: 既に WP 記事がある（wpPostId）なら更新、無ければ新規作成（再公開での重複を防ぐ）
+    const postInput = {
       title: article.title,
       content: bodyHtml,
       excerpt: article.metaDescription || undefined,
@@ -200,7 +211,10 @@ export async function POST(req: NextRequest) {
       categories: categoryIds.length ? categoryIds : undefined,
       tags: tagIds.length ? tagIds : undefined,
       date: publishAt,
-    });
+    };
+    const post = article.wpPostId
+      ? await updatePost(creds, article.wpPostId, postInput)
+      : await createPost(creds, postInput);
 
     await prisma.article.update({
       where: { id: articleId },

@@ -182,7 +182,7 @@ export interface CreatedPost {
   status: string;
 }
 
-export async function createPost(creds: WpCredentials, input: CreatePostInput): Promise<CreatedPost> {
+function buildPostBody(input: CreatePostInput): Record<string, unknown> {
   const body: Record<string, unknown> = {
     title: input.title,
     content: input.content,
@@ -193,14 +193,37 @@ export async function createPost(creds: WpCredentials, input: CreatePostInput): 
   if (input.categories && input.categories.length) body.categories = input.categories;
   if (input.tags && input.tags.length) body.tags = input.tags;
   if (input.date) body.date = input.date;
+  return body;
+}
 
+export async function createPost(creds: WpCredentials, input: CreatePostInput): Promise<CreatedPost> {
   const resp = await wpRequest(creds, '/posts', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify(buildPostBody(input)),
   });
   if (!resp.ok) {
     throw new WpError(resp.status, `記事投稿失敗 (HTTP ${resp.status}): ${await resp.text().then((t) => t.slice(0, 200))}`);
+  }
+  const data = (await resp.json()) as { id: number; link: string; status: string };
+  return { id: data.id, link: data.link, status: data.status };
+}
+
+/**
+ * 既存記事を更新する（再公開時の重複作成を防ぐ）。WP REST は POST /posts/{id} が更新。
+ */
+export async function updatePost(
+  creds: WpCredentials,
+  postId: number,
+  input: CreatePostInput,
+): Promise<CreatedPost> {
+  const resp = await wpRequest(creds, `/posts/${postId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(buildPostBody(input)),
+  });
+  if (!resp.ok) {
+    throw new WpError(resp.status, `記事更新失敗 (HTTP ${resp.status}): ${await resp.text().then((t) => t.slice(0, 200))}`);
   }
   const data = (await resp.json()) as { id: number; link: string; status: string };
   return { id: data.id, link: data.link, status: data.status };
