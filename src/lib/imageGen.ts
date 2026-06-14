@@ -1,21 +1,22 @@
 /**
  * 画像生成プロバイダー切替対応のラッパー。
  *
- * 既定(本番): Vertex AI `imagen-3.0-fast-generate-001` (Imagen 3 Fast) — 本番
- * (wp-article-rewriter) の公開記事と同一モデル。安価・高速・クリーンなイラストに最適。
- * フォールバック: Pollinations.ai (無料・Flux) — Vertex 終端失敗時にも「必ず画像」を出すため。
+ * 既定(本番): AI Studio (Generative Language API) の `imagen-3.0-fast-generate-001` —
+ * wp-article-rewriter の公開画像と**同一方式に統一**。失敗時は Vertex → Pollinations の順に
+ * フォールバックして「必ず画像」を出す。
  * スタイルは wp-article-rewriter の本番プロンプト準拠（クリーンなフラット・インフォグラフィック
  * イラスト、画像内テキストなし）。旧 Imagen4 + Canvas タイトル合成方式は廃止。
  */
 
 import { generate as llmGenerate, BASE_SYSTEM, sanitizeUserInput } from './llm';
 import { generateVertexImage, VertexImageError } from './vertexImageGen';
+import { generateAiStudioImagen } from './aiStudioImagen';
 
 export interface GenerateImageOptions {
   prompt: string;
   aspectRatio?: string;
-  /** 'vertex' = Vertex Imagen(本命, 既定 imagen-3.0-fast) / 'gemini' = AI Studio / 'pollinations' = 無料Flux */
-  provider?: 'vertex' | 'pollinations' | 'gemini';
+  /** 'aistudio' = AI Studio Imagen(既定・wp-rewriter統一) / 'vertex' = Vertex / 'gemini' = AI Studio gemini-image / 'pollinations' = 無料Flux */
+  provider?: 'aistudio' | 'vertex' | 'pollinations' | 'gemini';
   pollModel?: string;
   seed?: number;
   /** @deprecated 旧Imagen用の日本語タイトル合成。nanobanana方式(画像内テキストなし)では未使用。 */
@@ -140,42 +141,67 @@ async function generateWithGemini(opts: GenerateImageOptions): Promise<GenerateI
   throw new ImageGenError(502, '画像データなし');
 }
 
+/** Vertex(Imagen) を最大5回リトライ。終端失敗は throw（呼び出し側がフォールバック）。 */
+async function generateVertexWithRetry(opts: GenerateImageOptions): Promise<GenerateImageResult> {
+  const maxAttempts = 5;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      return await generateVertexImage({ prompt: opts.prompt, aspectRatio: opts.aspectRatio });
+    } catch (e) {
+      const ve = e instanceof VertexImageError ? e : null;
+      // 設定不備(SA/プロジェクト/トークン)はリトライしても無駄 → 即終端
+      const isConfig = !!ve && /SERVICE_ACCOUNT|PROJECT_ID|access token|未設定/i.test(ve.message);
+      const retryable = !!ve && !isConfig && [429, 503, 408, 500, 502, 504].includes(ve.statusCode);
+      if (retryable && attempt < maxAttempts - 1) {
+        const wait = 4000 * Math.pow(1.8, attempt) + Math.random() * 1000; // 4s,7.2s,12.9s,23.3s(+jitter)
+        console.warn(`[imageGen] Vertex ${ve?.statusCode} retry ${attempt + 1}/${maxAttempts} in ${Math.round(wait)}ms`);
+        await new Promise((r) => setTimeout(r, wait));
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw new ImageGenError(500, 'Vertex: 予期せぬループ終了');
+}
+
+function errMsg(e: unknown): string {
+  return (e instanceof Error ? e.message : String(e)).slice(0, 140);
+}
+
 /**
- * 画像生成。既定は Vertex(Imagen 3 Fast)。Vertex が終端失敗しても
- * Pollinations へフォールバックして **常に画像を返す**（「必ず画像」を担保）。
+ * 画像生成。既定は AI Studio Imagen（wp-rewriter と同一方式）。
+ * AI Studio → Vertex → Pollinations の順にフォールバックし **常に画像を返す**（「必ず画像」を担保）。
  */
 export async function generateImage(opts: GenerateImageOptions): Promise<GenerateImageResult> {
   const provider =
     opts.provider ||
-    (process.env.IMAGE_PROVIDER as 'vertex' | 'pollinations' | 'gemini' | undefined) ||
-    'vertex';
+    (process.env.IMAGE_PROVIDER as 'aistudio' | 'vertex' | 'pollinations' | 'gemini' | undefined) ||
+    'aistudio';
 
-  if (provider === 'vertex') {
-    const maxAttempts = 5;
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      try {
-        return await generateVertexImage({ prompt: opts.prompt, aspectRatio: opts.aspectRatio });
-      } catch (e) {
-        const ve = e instanceof VertexImageError ? e : null;
-        // 設定不備(SA/プロジェクト/トークン)はリトライしても無駄 → 即フォールバック
-        const isConfig = !!ve && /SERVICE_ACCOUNT|PROJECT_ID|access token|未設定/i.test(ve.message);
-        const retryable = !!ve && !isConfig && [429, 503, 408, 500, 502, 504].includes(ve.statusCode);
-        if (retryable && attempt < maxAttempts - 1) {
-          const wait = 4000 * Math.pow(1.8, attempt) + Math.random() * 1000; // 4s,7.2s,12.9s,23.3s(+jitter)
-          console.warn(`[imageGen] Vertex ${ve?.statusCode} retry ${attempt + 1}/${maxAttempts} in ${Math.round(wait)}ms`);
-          await new Promise((r) => setTimeout(r, wait));
-          continue;
-        }
-        // 終端失敗(safety / 設定不備 / リトライ尽き) → 必ず画像を出すため Pollinations へフォールバック
-        const msg = (ve?.message ?? (e instanceof Error ? e.message : String(e))).slice(0, 140);
-        console.warn('[imageGen] Vertex 失敗 → Pollinations フォールバック:', msg);
-        return generateWithPollinations(opts);
-      }
+  if (provider === 'pollinations') return generateWithPollinations(opts);
+  if (provider === 'gemini') return generateWithGemini(opts);
+
+  if (provider === 'aistudio') {
+    try {
+      return await generateAiStudioImagen({ prompt: opts.prompt, aspectRatio: opts.aspectRatio });
+    } catch (e) {
+      console.warn('[imageGen] AI Studio Imagen 失敗 → Vertex フォールバック:', errMsg(e));
     }
+    try {
+      return await generateVertexWithRetry(opts);
+    } catch (e) {
+      console.warn('[imageGen] Vertex 失敗 → Pollinations フォールバック:', errMsg(e));
+      return generateWithPollinations(opts);
+    }
+  }
+
+  // provider === 'vertex'
+  try {
+    return await generateVertexWithRetry(opts);
+  } catch (e) {
+    console.warn('[imageGen] Vertex 失敗 → Pollinations フォールバック:', errMsg(e));
     return generateWithPollinations(opts);
   }
-  if (provider === 'gemini') return generateWithGemini(opts);
-  return generateWithPollinations(opts);
 }
 
 /**
