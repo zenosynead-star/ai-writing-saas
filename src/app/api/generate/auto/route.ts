@@ -4,6 +4,7 @@ import { prisma } from '@/lib/db';
 import { generate, extractJson, BASE_SYSTEM, llmErrorToResponse } from '@/lib/llm';
 import { TITLE_GENERATION_PROMPT, HEADING_GENERATION_PROMPT, BODY_GENERATION_PROMPT } from '@/lib/prompts';
 import { analyzeCompetitors, fetchWebContext } from '@/lib/competitorAnalysis';
+import { computeTargetChars, expandBodyIfShort } from '@/lib/bodyExpand';
 import { validateHeadingTree } from '@/lib/headings';
 import { z } from 'zod';
 
@@ -100,19 +101,24 @@ export async function POST(req: NextRequest) {
       let competitorHeadings: string | undefined;
       let cooccurrenceWords: string[] | undefined;
       let avgWordCount: number | undefined;
+      let commonTopics: string[] | undefined;
+      let maxHeadingCount: number | undefined;
       if (useCompetitorAnalysis !== false) {
         try {
-          const a = await analyzeCompetitors(keywords.join(' '), { maxPages: 6 });
+          const a = await analyzeCompetitors(keywords.join(' '), { maxPages: 8 });
           if (a.competitorHeadingsText) competitorHeadings = a.competitorHeadingsText;
           if (a.cooccurrenceWords.length) cooccurrenceWords = a.cooccurrenceWords;
           if (a.avgWordCount) avgWordCount = a.avgWordCount;
+          if (a.commonTopics.length) commonTopics = a.commonTopics;
+          if (a.maxHeadingCount) maxHeadingCount = a.maxHeadingCount;
         } catch (e) {
           console.warn('[auto] competitor analysis skipped:', (e as Error).message);
         }
       }
+      const targetChars = computeTargetChars(avgWordCount);
       const headRes = await generate({
         logicalModel, taskType: 'heading', system: BASE_SYSTEM,
-        user: HEADING_GENERATION_PROMPT({ keywords, competitorHeadings, cooccurrenceWords, avgWordCount }),
+        user: HEADING_GENERATION_PROMPT({ keywords, competitorHeadings, cooccurrenceWords, avgWordCount, maxHeadingCount, commonTopics }),
         maxTokens: 8000, jsonMode: true,
       });
       const headJson = extractJson<HeadingResult>(headRes.content);
@@ -160,10 +166,17 @@ export async function POST(req: NextRequest) {
           toneSample: article.toneSample || undefined,
           volumeSpec: article.volumeSpec || undefined,
           cooccurrenceWords, webContext, relatedArticles,
+          targetChars, competitorHeadings, commonTopics,
         }),
         maxTokens: 16000, temperature: 0.65,
       });
-      const { html, meta } = extractMeta(bodyRes.content);
+      const extracted = extractMeta(bodyRes.content);
+      // 競合超えの分量・網羅に満たなければ自動増補（最大2回・既存構造は保持）
+      const exp = await expandBodyIfShort({
+        html: extracted.html, title, targetChars, commonTopics, logicalModel,
+      });
+      const html = exp.html;
+      const meta = extracted.meta;
 
       await prisma.article.update({
         where: { id: articleId },
@@ -173,7 +186,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         ok: true, articleId, title,
         headings: headJson.headings.length,
-        bodyChars: html.replace(/<[^>]+>/g, '').length,
+        bodyChars: exp.finalChars,
+        targetChars,
+        expandPasses: exp.passes,
         model: bodyRes.actualModel,
       });
     } catch (err) {

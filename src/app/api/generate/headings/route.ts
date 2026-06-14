@@ -41,13 +41,17 @@ export async function POST(req: NextRequest) {
     let competitorHeadings: string | undefined;
     let cooccurrenceWords: string[] | undefined;
     let avgWordCount: number | undefined;
+    let commonTopics: string[] | undefined;
+    let maxHeadingCount: number | undefined;
     let competitorMeta: { sources: number; avgWordCount: number } | undefined;
     if (useCompetitorAnalysis !== false) {
       try {
-        const analysis = await analyzeCompetitors(keywords.join(' '), { maxPages: 6 });
+        const analysis = await analyzeCompetitors(keywords.join(' '), { maxPages: 8 });
         if (analysis.competitorHeadingsText) competitorHeadings = analysis.competitorHeadingsText;
         if (analysis.cooccurrenceWords.length > 0) cooccurrenceWords = analysis.cooccurrenceWords;
         if (analysis.avgWordCount > 0) avgWordCount = analysis.avgWordCount;
+        if (analysis.commonTopics.length > 0) commonTopics = analysis.commonTopics;
+        if (analysis.maxHeadingCount > 0) maxHeadingCount = analysis.maxHeadingCount;
         competitorMeta = { sources: analysis.sources.length, avgWordCount: analysis.avgWordCount };
       } catch (e) {
         console.warn('[headings] competitor analysis failed, continuing without:', (e as Error).message);
@@ -63,6 +67,8 @@ export async function POST(req: NextRequest) {
         competitorHeadings,
         cooccurrenceWords,
         avgWordCount,
+        maxHeadingCount,
+        commonTopics,
         userCustomInstruction: customInstruction ? sanitizeUserInput(customInstruction) : undefined,
       }),
       maxTokens: 8000,

@@ -3,7 +3,8 @@ import { getCurrentUser } from '@/lib/auth';
 import { prisma } from '@/lib/db';
 import { generate, BASE_SYSTEM, type LogicalModel, llmErrorToResponse } from '@/lib/llm';
 import { BODY_GENERATION_PROMPT } from '@/lib/prompts';
-import { fetchWebContext } from '@/lib/competitorAnalysis';
+import { analyzeCompetitors, fetchWebContext } from '@/lib/competitorAnalysis';
+import { computeTargetChars, expandBodyIfShort } from '@/lib/bodyExpand';
 import { z } from 'zod';
 
 const Schema = z.object({
@@ -70,6 +71,24 @@ export async function POST(req: NextRequest) {
       });
       const relatedArticles = siblings.map((s) => ({ id: s.id, title: s.title }));
 
+      // 競合分析（targetChars / 必須トピック / 競合見出し を本文に反映＝競合超え）
+      let competitorHeadings: string | undefined;
+      let commonTopics: string[] | undefined;
+      let avgWordCount: number | undefined;
+      let cooccurrenceWords: string[] | undefined = article.cooccurrenceWords
+        ? JSON.parse(article.cooccurrenceWords)
+        : undefined;
+      try {
+        const a = await analyzeCompetitors(keywords.join(' '), { maxPages: 8 });
+        if (a.competitorHeadingsText) competitorHeadings = a.competitorHeadingsText;
+        if (a.commonTopics.length) commonTopics = a.commonTopics;
+        if (a.avgWordCount) avgWordCount = a.avgWordCount;
+        if (a.cooccurrenceWords.length) cooccurrenceWords = a.cooccurrenceWords;
+      } catch (e) {
+        console.warn('[body] competitor analysis skipped:', (e as Error).message);
+      }
+      const targetChars = computeTargetChars(avgWordCount);
+
       const result = await generate({
         logicalModel,
         taskType: 'body',
@@ -83,15 +102,28 @@ export async function POST(req: NextRequest) {
           headingTree: buildHeadingTreeText(article.headings),
           toneSample: article.toneSample || undefined,
           volumeSpec: article.volumeSpec || undefined,
-          cooccurrenceWords: article.cooccurrenceWords ? JSON.parse(article.cooccurrenceWords) : undefined,
+          cooccurrenceWords,
           webContext,
           relatedArticles,
+          targetChars,
+          competitorHeadings,
+          commonTopics,
         }),
         maxTokens: 16000,
         temperature: 0.65,
       });
 
-      const { html, meta } = extractMetaDescription(result.content);
+      const extracted = extractMetaDescription(result.content);
+      // 競合超えの分量・網羅に満たなければ自動増補（最大2回・既存構造は保持）
+      const exp = await expandBodyIfShort({
+        html: extracted.html,
+        title: article.title,
+        targetChars,
+        commonTopics,
+        logicalModel,
+      });
+      const html = exp.html;
+      const meta = extracted.meta;
 
       await prisma.article.update({
         where: { id: articleId },
@@ -103,7 +135,7 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      return NextResponse.json({ bodyHtml: html, metaDescription: meta, model: result.actualModel });
+      return NextResponse.json({ bodyHtml: html, metaDescription: meta, targetChars, expandPasses: exp.passes, model: result.actualModel });
     } catch (err) {
       await prisma.article.update({ where: { id: articleId }, data: { status: 'failed' } });
       throw err;

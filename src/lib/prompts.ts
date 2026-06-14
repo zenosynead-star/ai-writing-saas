@@ -71,6 +71,8 @@ export const HEADING_GENERATION_PROMPT = (vars: {
   competitorHeadings?: string;
   cooccurrenceWords?: string[];
   avgWordCount?: number;
+  maxHeadingCount?: number;
+  commonTopics?: string[];
   userCustomInstruction?: string;
 }) => `# 役割
 あなたはGoogle検索で1位を獲得する記事を作成する熟練のSEOコンサルタントです。
@@ -122,10 +124,19 @@ ${
     ? `\n# 共起語（競合上位で頻出した重要語）\n以下の語は検索上位記事で繰り返し使われている重要トピックです。関連する見出しに自然に反映し、網羅性を高めてください（不自然な詰め込みは禁止）:\n${vars.cooccurrenceWords.join('、')}`
     : ''
 }
-${vars.avgWordCount && vars.avgWordCount > 0 ? `\n# ボリューム目安\n競合上位の平均本文量は約${vars.avgWordCount}文字です。これと同等以上の網羅性を持つ見出し数にしてください。` : ''}
+${
+  vars.commonTopics && vars.commonTopics.length > 0
+    ? `\n# 必須網羅トピック（複数の競合が共通で扱う＝検索意図の中核。漏らさず見出しに反映）\n${vars.commonTopics.join('、')}`
+    : ''
+}
+${
+  vars.avgWordCount && vars.avgWordCount > 0
+    ? `\n# ボリューム/見出し数の目標（競合超え）\n競合上位の平均本文量は約${vars.avgWordCount}文字${vars.maxHeadingCount && vars.maxHeadingCount > 0 ? `、最大見出し数は${vars.maxHeadingCount}個` : ''}です。網羅性で競合を上回るため、${vars.maxHeadingCount && vars.maxHeadingCount > 0 ? `見出し総数は${vars.maxHeadingCount + 2}個以上を目安に、` : ''}競合が扱う全トピックを含めた上で独自トピックを1〜2個追加してください。`
+    : ''
+}
 
 # 出力ルール
-1. h2見出しは5〜8個。各h2の下にh3を1〜4個。必要に応じてh4も。
+1. h2見出しは5〜9個（競合の網羅性を上回る数）。各h2の下にh3を1〜4個。必要に応じてh4も。
 2. 結論を先に求めるユーザー向けに、最初のh2は「結論」「概要」系を配置可。
 3. 最後のh2は必ず「まとめ」または相当する括り。
 4. 各見出しにキーワードを詰め込みすぎない（自然な日本語）。
@@ -160,6 +171,9 @@ export const BODY_GENERATION_PROMPT = (vars: {
   cooccurrenceWords?: string[];
   webContext?: string;
   relatedArticles?: Array<{ id: string; title: string }>;
+  targetChars?: number;
+  competitorHeadings?: string;
+  commonTopics?: string[];
 }) => `# 役割
 あなたはSEOで上位表示される高品質な記事を書くプロのライターです。
 以下の構成と方針に従って、本文を執筆してください。
@@ -172,6 +186,7 @@ export const BODY_GENERATION_PROMPT = (vars: {
 潜在ニーズ: ${vars.latentNeeds.join('、')}
 ${vars.toneSample ? `文体サンプル: ${vars.toneSample}` : '文体: です・ます調'}
 本文量指定: ${vars.volumeSpec || '指定なし'}
+${vars.targetChars ? `\n# 文字数の必達目標（競合超え）\nこの記事は競合上位を内容量で上回るため、本文合計 **${vars.targetChars} 文字以上** を必達とします（下回ると不合格）。水増しや繰り返しではなく、具体例・手順・数値・比較・FAQ で実質的に充実させること。` : ''}
 ${
   vars.cooccurrenceWords && vars.cooccurrenceWords.length > 0
     ? `\n# 共起語（必ず自然に含める重要語）\n検索上位記事で頻出する以下の語を、文脈に合う箇所で自然に使ってください（SEOの網羅性に直結。ただし不自然な羅列は禁止）:\n${vars.cooccurrenceWords.join('、')}`
@@ -187,6 +202,16 @@ ${
     ? `\n# 内部リンク（関連記事への発リンク。SEOの回遊性向上に必須）\n以下は同サイトの既存記事です。本文の文脈に自然に合うものを2〜4本選び、該当箇所に内部リンクを挿入してください。\n形式: <a href="/articles/{id}">記事タイトルに沿った自然なアンカーテキスト</a>\n- 無理に全部使わず、文脈が合うものだけ。同じ記事へのリンクは1回まで。\n- アンカーテキストは「こちら」等ではなく内容が分かる語にする。\n${vars.relatedArticles.map((a) => `  - id=${a.id} : ${a.title}`).join('\n')}`
     : ''
 }
+${
+  vars.commonTopics && vars.commonTopics.length > 0
+    ? `\n# 必須網羅トピック（競合が共通で扱う中核。各トピックを本文で必ず具体的に扱う）\n${vars.commonTopics.join('、')}`
+    : ''
+}
+${
+  vars.competitorHeadings
+    ? `\n# 競合上位の見出し構成（内容量・具体性で上回ること。全トピックを網羅し、競合に無い切り口も足す）\n${vars.competitorHeadings}`
+    : ''
+}
 
 # 構成（厳守）
 ${vars.headingTree}
@@ -195,11 +220,11 @@ ${vars.headingTree}
 
 ## 必須事項
 1. 上記の見出し構造を一切変更しない（追加・削除・順序入替不可）
-2. 各h2セクションは300〜800字、h3セクションは150〜400字を目安
+2. **各h2セクションは最低400字（必須）**、h3セクションは最低200字。薄いセクションを作らない
 3. 最初の100字以内にターゲットキーワードを含む（リード文）
 4. キーワード密度は2〜4%を目安（過度な詰め込みは禁止）
 5. PREP法（結論→理由→具体例→結論）を基本構造とする
-6. 全体で3000字以上を目安とする
+6. **本文は合計 ${vars.targetChars ? vars.targetChars : 3500} 文字以上（必須・"目安"ではない）**。競合を内容量・網羅性で上回ることが最優先。水増しせず、具体例・手順・数値・比較・FAQ で実質的に充実させる
 
 ## 文体ルール
 - 「です・ます」調で統一（指定があればそれに従う）
@@ -232,6 +257,35 @@ ${vars.headingTree}
 - 各セクション: <h2>/<h3>/<p>/<ul>/<ol>/<table>/<strong>
 - まとめ: 最後の<h2>と<p>
 - メタディスクリプション: 末尾にHTMLコメントで <!-- META: ... --> 形式（120字以内）`;
+
+/** 文字数・網羅が不足した本文を、既存構造を保ったまま増補するプロンプト（自動増補パス用）。 */
+export const EXPAND_BODY_PROMPT = (vars: {
+  title: string;
+  currentChars: number;
+  targetChars: number;
+  bodyHtml: string;
+  missingTopics?: string[];
+}) => `# 役割
+あなたはSEO記事の編集者です。以下の記事本文は文字数・網羅性が不足しています。競合上位を上回るために増補してください。
+
+# 現状
+タイトル: ${vars.title}
+現在の本文量: 約${vars.currentChars}文字 / 目標: ${vars.targetChars}文字以上
+${vars.missingTopics && vars.missingTopics.length > 0 ? `未カバーの重要トピック（必ず本文に追加して具体的に扱う）: ${vars.missingTopics.join('、')}` : ''}
+
+# 増補ルール（厳守）
+1. **既存の見出し構造・本文・内部リンク(<a>)・装飾(<strong>/<mark>/<blockquote>/<table>/<ul>/<ol>)はそのまま残す**（削除・改変しない）
+2. 各セクションに具体例・手順・数値・比較表・FAQ・注意点を加えて自然に厚くする（水増し・同義反復は禁止）
+3. 未カバーの重要トピックは、適切なセクション内 or 新規 h2/h3 として追加して扱う
+4. 文体・トーンは既存に合わせる（です・ます調）。事実は正確に、不確かな数値は書かない
+5. 文字装飾ルールは本文生成時と同じ（重要語 <strong>、最重要文 <mark>、補足 <blockquote>、比較/手順は <table>/<ul>）
+6. **本文合計 ${vars.targetChars} 文字以上**になるまで充実させる
+
+# 入力（この本文を増補して返す）
+${vars.bodyHtml}
+
+# 出力形式
+増補後の**本文HTMLのみ**を出力（前後に説明文やマークダウンを付けない）。末尾の <!-- META: ... --> コメントがあれば保持する。`;
 
 export const REWRITE_GENERATION_PROMPT = (vars: {
   sourceUrl: string;

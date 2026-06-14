@@ -13,7 +13,7 @@
  */
 
 import { fetchPage } from './fetcher';
-import { parseArticle, headingsToMarkdown, type ParsedArticle } from './htmlParser';
+import { parseArticle, headingsToMarkdown, type ParsedArticle, type ParsedHeading } from './htmlParser';
 
 export interface CompetitorSource {
   url: string;
@@ -33,6 +33,14 @@ export interface CompetitorAnalysis {
   cooccurrenceWords: string[];
   /** 競合上位の平均文字数（本文ボリュームの目安） */
   avgWordCount: number;
+  /** 競合上位の最大文字数 */
+  maxWordCount: number;
+  /** 競合の平均見出し数（全レベル総数） */
+  avgHeadingCount: number;
+  /** 競合の最大見出し数（全レベル総数） */
+  maxHeadingCount: number;
+  /** 複数競合が共通で扱うトピック語（必須網羅の目安）。多い順。 */
+  commonTopics: string[];
   /** 競合のタイトル一覧（タイトル設計の参考用） */
   competitorTitles: string[];
   /** 何件ヒットしたか（検索ボリュームの代理指標として参考表示） */
@@ -295,6 +303,63 @@ function extractCooccurrenceWords(texts: string[], topN = 25): string[] {
     .map(([w]) => w);
 }
 
+/** 見出しツリーの総数（全レベル）を数える。 */
+function countHeadings(tree: ParsedHeading[]): number {
+  let n = 0;
+  const walk = (nodes: ParsedHeading[]) => {
+    for (const x of nodes) {
+      n++;
+      walk(x.children);
+    }
+  };
+  walk(tree);
+  return n;
+}
+
+/** 見出しツリーを全レベルのテキスト配列に平坦化する。 */
+function flattenHeadingTexts(tree: ParsedHeading[]): string[] {
+  const out: string[] = [];
+  const walk = (nodes: ParsedHeading[]) => {
+    for (const x of nodes) {
+      out.push(x.text);
+      walk(x.children);
+    }
+  };
+  walk(tree);
+  return out;
+}
+
+/**
+ * 複数競合が共通で扱うトピック語を抽出する（必須網羅トピックの目安）。
+ * 各競合の見出し語を「競合ドキュメント頻度（何社が使っているか）」で集計し、
+ * minCompetitors 社以上が使う語を多い順に返す（生の頻度でなく社数で見るのが要点）。
+ */
+function extractCommonTopics(perCompetitorHeadings: string[][], minCompetitors = 2, topN = 15): string[] {
+  const df = new Map<string, number>();
+  for (const headings of perCompetitorHeadings) {
+    const joined = headings.join(' ');
+    const inThis = new Set<string>();
+    const tokens = [
+      ...(joined.match(/[一-龯ヶ々]{2,12}/g) || []),
+      ...(joined.match(/[ァ-ー][ァ-ーー・]{2,11}/g) || []),
+      ...(joined.match(/[A-Za-z][A-Za-z0-9._-]{2,19}/g) || []).map((s) => s.toLowerCase()),
+    ];
+    for (const t of tokens) {
+      const w = t.trim();
+      if (w.length < 2 || w.length > 12) continue;
+      if (STOPWORDS.has(w)) continue;
+      if (/^[0-9０-９\s]+$/.test(w)) continue;
+      inThis.add(w);
+    }
+    for (const t of inThis) df.set(t, (df.get(t) || 0) + 1);
+  }
+  return [...df.entries()]
+    .filter(([, c]) => c >= minCompetitors)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, topN)
+    .map(([w]) => w);
+}
+
 /** 解析済み記事を「サイトN: タイトル / 見出しツリー」形式に整形 */
 function formatCompetitorHeadings(parsed: Array<{ url: string; article: ParsedArticle }>): string {
   return parsed
@@ -376,7 +441,7 @@ export async function analyzeCompetitors(
   query: string,
   opts: { maxPages?: number } = {},
 ): Promise<CompetitorAnalysis> {
-  const maxPages = opts.maxPages ?? 6;
+  const maxPages = opts.maxPages ?? 8;
 
   const empty: CompetitorAnalysis = {
     query,
@@ -384,6 +449,10 @@ export async function analyzeCompetitors(
     competitorHeadingsText: '',
     cooccurrenceWords: [],
     avgWordCount: 0,
+    maxWordCount: 0,
+    avgHeadingCount: 0,
+    maxHeadingCount: 0,
+    commonTopics: [],
     competitorTitles: [],
     totalEstimatedResults: 0,
   };
@@ -431,9 +500,13 @@ export async function analyzeCompetitors(
     headingCount: p.article.headings.length,
   }));
 
-  const avgWordCount = Math.round(
-    parsed.reduce((sum, p) => sum + p.article.wordCount, 0) / parsed.length,
-  );
+  const wordCounts = parsed.map((p) => p.article.wordCount);
+  const headingCounts = parsed.map((p) => countHeadings(p.article.headings));
+  const avgWordCount = Math.round(wordCounts.reduce((a, b) => a + b, 0) / parsed.length);
+  const maxWordCount = Math.max(...wordCounts);
+  const avgHeadingCount = Math.round(headingCounts.reduce((a, b) => a + b, 0) / parsed.length);
+  const maxHeadingCount = Math.max(...headingCounts);
+  const commonTopics = extractCommonTopics(parsed.map((p) => flattenHeadingTexts(p.article.headings)));
 
   // 共起語は見出し全文 + 各記事の先頭段落から抽出
   const textsForCooc: string[] = [];
@@ -449,6 +522,10 @@ export async function analyzeCompetitors(
     competitorHeadingsText: formatCompetitorHeadings(parsed),
     cooccurrenceWords,
     avgWordCount,
+    maxWordCount,
+    avgHeadingCount,
+    maxHeadingCount,
+    commonTopics,
     competitorTitles: parsed.map((p) => p.article.title).filter(Boolean),
     totalEstimatedResults: total,
   };
