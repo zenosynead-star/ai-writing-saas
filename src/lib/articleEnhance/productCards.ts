@@ -755,7 +755,7 @@ function findFirstMentionOutsideCards(
  * 冪等: data-ne-product-id が既にある商品はスキップ。
  * 挿入は末尾側から行い index ずれを防ぐ。
  */
-export function insertProductCards(html: string): string {
+export function insertProductCards(html: string, opts?: { productId?: string }): string {
   if (!html) return html;
 
   const products = loadProducts();
@@ -764,18 +764,25 @@ export function insertProductCards(html: string): string {
   // priority 昇順ソート
   const sorted = [...products].sort((a, b) => (a.priority ?? 999) - (b.priority ?? 999));
 
-  // 本文に出現する最有力1商品を選定
   let chosen: Product | null = null;
   const cardRanges = findProductCardRanges(html);
   const tableRanges = findTableRanges(html);
 
-  for (const p of sorted) {
-    if (!p.cta_url) continue;
-    const candidates = [p.name, ...(p.aliases || [])].filter(Boolean) as string[];
-    const mentionIdx = findFirstMentionOutsideCards(html, candidates, cardRanges, tableRanges);
-    if (mentionIdx !== null) {
-      chosen = p;
-      break;
+  // おすすめ商品ルールで明示指定された商品があれば、本文言及に依らずそれを採用する。
+  if (opts?.productId) {
+    chosen = sorted.find((p) => p.product_id === opts.productId && p.cta_url) ?? null;
+  }
+
+  // 指定が無い/該当しない場合は従来どおり「本文言及 × priority」で最有力1商品を自動検出
+  if (!chosen) {
+    for (const p of sorted) {
+      if (!p.cta_url) continue;
+      const candidates = [p.name, ...(p.aliases || [])].filter(Boolean) as string[];
+      const mentionIdx = findFirstMentionOutsideCards(html, candidates, cardRanges, tableRanges);
+      if (mentionIdx !== null) {
+        chosen = p;
+        break;
+      }
     }
   }
 

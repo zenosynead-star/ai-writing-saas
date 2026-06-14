@@ -18,6 +18,7 @@ import { requestIndexing } from '@/lib/indexing';
 import { prependStyleBlock } from '@/lib/articleEnhance/styles';
 import { insertFunnelCards } from '@/lib/articleEnhance/relatedCards';
 import { insertProductCards } from '@/lib/articleEnhance/productCards';
+import { pickProductId } from '@/lib/productRules';
 import { normalizeForWpautop } from '@/lib/articleEnhance/wpautop';
 import { z } from 'zod';
 
@@ -201,8 +202,23 @@ export async function POST(req: NextRequest) {
     // ===== 記事品質強化: デザインCSS（cv2026）を記事冒頭に注入（公開段=sanitize後なので保持される）=====
     // Stage 2/3 で商品カード・関連記事ファネルもこの前段で bodyHtml に挿入していく。
     if (enhance) {
-      // 商品カード（商品マスター言及検出 → mybest風 v27 カード）を挿入
-      bodyHtml = insertProductCards(bodyHtml);
+      // おすすめ商品ルールで推奨商品を決定（生成時に確定済みなら優先、無ければ公開先サイトのルールで解決）
+      let productId: string | null = article.featuredProductId || null;
+      if (!productId) {
+        try {
+          const rules = await prisma.productRule.findMany({ where: { wpConnectionId: conn.id } });
+          productId = pickProductId({
+            keywords,
+            title: article.title,
+            rules: rules.map((r) => ({ keyword: r.keyword, productId: r.productId, enabled: r.enabled, order: r.order })),
+            defaultProductId: conn.defaultProductId,
+          });
+        } catch (e) {
+          console.warn('[wordpress/publish] product rule resolution skipped:', (e as Error).message);
+        }
+      }
+      // 商品カード（ルール選定商品を優先、無ければ商品マスター言及検出）を挿入
+      bodyHtml = insertProductCards(bodyHtml, { productId: productId || undefined });
       // 関連記事ファネル（マネーページ/中間ページへの関連カード）を挿入
       bodyHtml = insertFunnelCards(bodyHtml, { keywords, title: article.title });
       // デザインCSS <style> を記事冒頭へ（カード類の後＝CSSが最上部に来る）

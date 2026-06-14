@@ -155,6 +155,7 @@ model Article {
   rewriteMode  String?  // structure_preserve / restructure / partial
   // 画像生成・WordPress連携（要件6章・2.2）
   featuredImageId String?  // ArticleImage.id (アイキャッチ)
+  featuredProductId String? // おすすめ商品ルールで選定した推奨商品 (products.json product_id)。本文/カードで使用
   wpPostId     Int?     // WordPressに投稿後のPost ID
   wpPostStatus String?  // draft / publish / future
   totalCreditsUsed Int  @default(0)
@@ -214,17 +215,35 @@ model ArticleImage {
 
 // WordPress 連携設定（要件2.2: 記事の自動投稿）
 model WpConnection {
-  id            String   @id @default(cuid())
-  userId        String
-  siteUrl       String   // https://blog.example.com
-  username      String
-  appPassword   String   // Application Password
-  defaultStatus String   @default("draft")  // draft / publish / future
-  isDefault     Boolean  @default(true)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id               String   @id @default(cuid())
+  userId           String
+  siteUrl          String   // https://blog.example.com
+  username         String
+  appPassword      String   // Application Password
+  defaultStatus    String   @default("draft")  // draft / publish / future
+  isDefault        Boolean  @default(true)
+  defaultProductId String?  // おすすめ商品ルールのデフォルト商品 (products.json の product_id)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  productRules     ProductRule[]
 
   @@index([userId])
+}
+
+/// サイト(WpConnection)単位の「おすすめ商品」出し分けルール。
+/// keyword(部分一致) が記事のキーワード/タイトルに含まれれば productId を推奨商品にする。
+/// order 昇順で最初に一致したものを採用。一致なしは WpConnection.defaultProductId。
+model ProductRule {
+  id             String       @id @default(cuid())
+  wpConnectionId String
+  wpConnection   WpConnection @relation(fields: [wpConnectionId], references: [id], onDelete: Cascade)
+  order          Int          @default(0)
+  keyword        String       // 含む文言 (部分一致・大文字小文字無視)
+  productId      String       // products.json の product_id
+  enabled        Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+
+  @@index([wpConnectionId])
 }
 
 model LlmoBrand {

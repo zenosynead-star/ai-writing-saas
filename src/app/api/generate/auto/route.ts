@@ -5,6 +5,7 @@ import { generate, extractJson, BASE_SYSTEM, llmErrorToResponse } from '@/lib/ll
 import { TITLE_GENERATION_PROMPT, HEADING_GENERATION_PROMPT, BODY_GENERATION_PROMPT } from '@/lib/prompts';
 import { analyzeCompetitors, fetchWebContext } from '@/lib/competitorAnalysis';
 import { computeTargetChars, clampTargetChars, expandBodyIfShort } from '@/lib/bodyExpand';
+import { pickProductId, getProductById, buildRecommendedProductBrief } from '@/lib/productRules';
 import { validateHeadingTree } from '@/lib/headings';
 import { z } from 'zod';
 
@@ -144,6 +145,30 @@ export async function POST(req: NextRequest) {
         },
       });
 
+      // ===== 2.5 おすすめ商品ルール: サイト(既定の WpConnection)単位でキーワードから推奨商品を決定 =====
+      let featuredProductId: string | null = null;
+      let recommendedProduct: string | undefined;
+      try {
+        // 公開時の既定接続(publish と同じ isDefault:true)のルールで解決し、
+        // 生成時と公開時で推奨商品サイトが食い違わないようにする。
+        // 既定接続が無ければ featuredProductId は null のままにし、公開時に公開先サイトのルールで解決させる。
+        const conn = await prisma.wpConnection.findFirst({
+          where: { userId: user.id, isDefault: true },
+        });
+        if (conn) {
+          const rules = await prisma.productRule.findMany({ where: { wpConnectionId: conn.id } });
+          featuredProductId = pickProductId({
+            keywords,
+            title,
+            rules: rules.map((r) => ({ keyword: r.keyword, productId: r.productId, enabled: r.enabled, order: r.order })),
+            defaultProductId: conn.defaultProductId,
+          });
+          recommendedProduct = buildRecommendedProductBrief(getProductById(featuredProductId));
+        }
+      } catch (e) {
+        console.warn('[auto] product rule resolution skipped:', (e as Error).message);
+      }
+
       // ===== 3. 本文 =====
       let webContext: string | undefined;
       if (useWebSearch || article.useWebSearch) {
@@ -171,7 +196,7 @@ export async function POST(req: NextRequest) {
           toneSample: article.toneSample || undefined,
           volumeSpec: article.volumeSpec || undefined,
           cooccurrenceWords, webContext, relatedArticles,
-          targetChars, competitorHeadings, commonTopics,
+          targetChars, competitorHeadings, commonTopics, recommendedProduct,
         }),
         maxTokens: 16000, temperature: 0.65,
       });
@@ -186,7 +211,7 @@ export async function POST(req: NextRequest) {
 
       await prisma.article.update({
         where: { id: articleId },
-        data: { bodyHtml: html, metaDescription: meta, modelUsed: bodyRes.actualModel, status: 'completed', step: 5 },
+        data: { bodyHtml: html, metaDescription: meta, modelUsed: bodyRes.actualModel, status: 'completed', step: 5, featuredProductId },
       });
 
       return NextResponse.json({

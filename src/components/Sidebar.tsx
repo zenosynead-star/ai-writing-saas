@@ -61,9 +61,17 @@ const NAV: Array<{ href: string; label: string; icon: React.ReactNode; match: (p
     ),
   },
   {
+    href: '/settings/products',
+    label: 'おすすめ商品',
+    match: (p) => p.startsWith('/settings/products'),
+    icon: (
+      <svg viewBox="0 0 20 20" fill="currentColor" className="w-[18px] h-[18px]"><path fillRule="evenodd" d="M9.243 2.343a2 2 0 012.828 0l5.586 5.586a2 2 0 010 2.828l-6.486 6.486a2 2 0 01-2.828 0L2.757 11.743A2 2 0 012 10.33V5a2 2 0 012-2h5.243zM6.5 8a1.5 1.5 0 100-3 1.5 1.5 0 000 3z" clipRule="evenodd" /></svg>
+    ),
+  },
+  {
     href: '/settings/wordpress',
     label: 'WordPress連携',
-    match: (p) => p.startsWith('/settings'),
+    match: (p) => p.startsWith('/settings/wordpress') || p === '/settings',
     icon: (
       <svg viewBox="0 0 20 20" fill="currentColor" className="w-[18px] h-[18px]"><path fillRule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.53 1.53 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.53 1.53 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.53 1.53 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.532 1.532 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.53 1.53 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.53 1.53 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.53 1.53 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" /></svg>
     ),

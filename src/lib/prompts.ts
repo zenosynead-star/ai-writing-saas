@@ -174,6 +174,7 @@ export const BODY_GENERATION_PROMPT = (vars: {
   targetChars?: number;
   competitorHeadings?: string;
   commonTopics?: string[];
+  recommendedProduct?: string;
 }) => `# 役割
 あなたはSEOで上位表示される高品質な記事を書くプロのライターです。
 以下の構成と方針に従って、本文を執筆してください。
@@ -205,6 +206,11 @@ ${
 ${
   vars.commonTopics && vars.commonTopics.length > 0
     ? `\n# 必須網羅トピック（競合が共通で扱う中核。各トピックを本文で必ず具体的に扱い、競合を上回る具体性で書く）\n${vars.commonTopics.join('、')}`
+    : ''
+}
+${
+  vars.recommendedProduct
+    ? `\n# 最優先で推奨する自社商品（イチオシ・必ず反映）\n読者に最終的にすすめる「一番のおすすめ」はこの商品に統一すること。比較の結論・まとめでこの商品を最もおすすめとして自然に推し、商品名を本文中に最低1回そのまま登場させる（この商品名の近くに後で商品カードが自動挿入される）。長所は下記の特長に基づき具体的に書き、誇大・断定（「必ず」「No.1」等）や薬機法・景表法に触れる表現は避ける。\n${vars.recommendedProduct}`
     : ''
 }
 
