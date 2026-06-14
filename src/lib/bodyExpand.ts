@@ -9,10 +9,14 @@
 import { generate, BASE_SYSTEM, type LogicalModel } from './llm';
 import { EXPAND_BODY_PROMPT } from './prompts';
 
-/** 目標文字数 = max(競合平均 ×1.3, 3500)。競合データが無くても最低 3500。 */
+/**
+ * 目標文字数 = max(競合平均 ×1.3, 3500) を 5500 で上限クランプ。
+ * 競合データが無くても最低 3500。上限は、1回の生成が claude CLI の 5分制限を超えない
+ * 現実的な長さに抑えるため（過大な要求は生成停滞・タイムアウトの原因になる）。
+ */
 export function computeTargetChars(avgWordCount?: number): number {
   const fromCompetitor = avgWordCount && avgWordCount > 0 ? Math.round(avgWordCount * 1.3) : 0;
-  return Math.max(fromCompetitor, 3500);
+  return Math.min(Math.max(fromCompetitor, 3500), 5500);
 }
 
 /** HTML を除いたプレーン本文の文字数。 */
@@ -51,7 +55,7 @@ export async function expandBodyIfShort(opts: {
   maxPasses?: number;
 }): Promise<{ html: string; passes: number; finalChars: number }> {
   let html = opts.html;
-  const maxPasses = opts.maxPasses ?? 2;
+  const maxPasses = opts.maxPasses ?? 1; // 増補は原則1回（claude CLI 負荷/タイムアウト抑制）
   let passes = 0;
 
   for (let i = 0; i < maxPasses; i++) {
