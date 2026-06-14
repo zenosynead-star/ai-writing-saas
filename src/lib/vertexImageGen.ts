@@ -88,7 +88,7 @@ function getVertexConfig(): VertexConfig {
   return {
     projectId,
     location: (process.env.VERTEX_LOCATION || 'us-central1').trim(),
-    model: (process.env.VERTEX_IMAGE_MODEL || 'imagen-3.0-fast-generate-001').trim(),
+    model: (process.env.VERTEX_IMAGE_MODEL || 'gemini-2.5-flash-image').trim(),
   };
 }
 

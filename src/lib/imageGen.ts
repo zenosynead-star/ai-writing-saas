@@ -1,16 +1,16 @@
 /**
  * 画像生成プロバイダー切替対応のラッパー。
  *
- * 既定(本番): Vertex AI `imagen-3.0-fast-generate-001`（wp-article-rewriter の画像と同一モデル）。
- * 失敗時は Pollinations へフォールバックして「必ず画像」を出す。
- * ※`imagen-3.0-fast-*` は Vertex 専用モデルで AI Studio では 404。課金有効な AI Studio キー＋
- *   AI Studio 用モデルID(例 `imagen-3.0-generate-002`)を `IMAGE_PROVIDER=aistudio`＋`IMAGE_MODEL` で
- *   指定した時のみ AI Studio 経路（AI Studio→Vertex→Pollinations）を使う。
- * スタイルは wp-article-rewriter の本番プロンプト準拠（クリーンなフラット・インフォグラフィック
- * イラスト、画像内テキストなし）。旧 Imagen4 + Canvas タイトル合成方式は廃止。
+ * 既定(本番): Vertex AI `gemini-2.5-flash-image`（Nano Banana。wp-article-rewriter と同じ
+ *   GCPプロジェクト form-collector-v2 / us-central1。日本語タイトルを画像内に描画できる）。
+ *   失敗時は Pollinations へフォールバックして「必ず画像」を出す。
+ * ※Nano Banana Pro(gemini-3-pro-image-*) と gemini-3.1-flash-image は当該プロジェクトで 404
+ *   (未提供/未許可)。Pro を使うには GCP 側でモデルの有効化が必要。
+ * ※AI Studio 経路は `IMAGE_PROVIDER=aistudio`＋課金有効キー＋AI Studio用モデルID 指定時のみ。
+ * プロンプトは wp-article-rewriter 準拠（日本語タイトルを中央に描いたアイキャッチ風イラスト）。
  */
 
-import { generate as llmGenerate, BASE_SYSTEM, sanitizeUserInput } from './llm';
+import { sanitizeUserInput } from './llm';
 import { generateVertexImage, VertexImageError } from './vertexImageGen';
 import { generateAiStudioImagen } from './aiStudioImagen';
 
@@ -38,16 +38,16 @@ export class ImageGenError extends Error {
 }
 
 /**
- * nanobanana(本番)準拠の画像プロンプト。topic を「クリーンなフラット・インフォグラフィック
- * イラスト(画像内テキストなし)」に包む。wp-article-rewriter DEFAULT_PROMPT_TEMPLATE 準拠。
+ * Nano Banana(Vertex gemini-2.5-flash-image)向けの画像プロンプト。wp-article-rewriter の
+ * 本番テンプレ準拠で、topic を「日本語タイトルを中央に大きく描いたアイキャッチ風イラスト」に包む。
  */
 export function nanoBananaPrompt(topic: string): string {
-  const t = (topic || '').trim() || 'a helpful Japanese blog topic';
+  const t = (topic || '').trim() || 'ブログ記事';
   return (
-    `${t}, modern flat illustration, soft pastel colors (light blue / cream), ` +
-    `infographic style, clean composition, friendly and approachable, ` +
-    `no text labels, no watermark, no human faces close-up, ` +
-    `16:9 aspect ratio, suitable for Japanese tech blog header`
+    `${t}。日本語のタイトル文字「${t}」を画像中央に大きく、正確で読みやすく描画する。` +
+    `テーマに関連するモチーフ(人物キャラクターや関連アイテム)を周囲に配置。` +
+    `パステル調のフラットイラスト、明るく親しみやすい配色、ブログのアイキャッチ/ヘッダー風、16:9アスペクト比。` +
+    `日本語の漢字・ひらがな・カタカナを正確に描画し、誤字や英単語・記号の混入を避ける。`
   );
 }
 
@@ -216,8 +216,9 @@ export interface H2Section {
 }
 
 /**
- * AI で記事の見出し/タイトルを「英語の topic 名詞句」に翻訳し、nanobanana テンプレに包む。
- * 失敗時は日本語のままテンプレに包むフォールバック。
+ * 記事のタイトル/見出しを日本語のまま nanobanana テンプレに包む（英訳しない＝wp-rewriter 統一）。
+ * Nano Banana は日本語タイトルを画像内に描けるため、翻訳せず日本語をそのまま topic にする
+ * （LLM 翻訳呼び出しも不要になり高速・安定）。
  */
 export async function buildOptimizedImagePrompts(opts: {
   title: string;
@@ -232,48 +233,15 @@ export async function buildOptimizedImagePrompts(opts: {
       : (opts.h2Texts || []).map((t) => ({ text: t }));
   const h2Texts = sections.map((s) => s.text);
   const title = sanitizeUserInput(opts.title);
-  const headings = h2Texts.map(sanitizeUserInput);
-
-  try {
-    const userPrompt =
-      `Convert a Japanese article's title and section headings into concise ENGLISH topic noun phrases for image generation. ` +
-      `Each topic = the core visual concept (3-8 words). Strip questions/CTAs/年号/numbers/brand-superlatives. ` +
-      `Output PURE JSON only (no fences):\n` +
-      `{ "eyecatch": "english topic for the hero image", "h2": [${headings.map(() => '"english topic"').join(', ')}] }\n` +
-      `The "h2" array MUST have exactly ${headings.length} items, in the same order.\n\n` +
-      `Title: ${title}\n` +
-      `Headings:\n${headings.map((h, i) => `${i + 1}. ${h}`).join('\n')}`;
-    const res = await llmGenerate({
-      logicalModel: 'low_cost',
-      taskType: 'image_prompt',
-      system: BASE_SYSTEM,
-      user: userPrompt,
-      maxTokens: 2000,
-      jsonMode: true,
-      temperature: 0.5,
-    });
-    const cleaned = res.content.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-    const parsed = JSON.parse(cleaned) as { eyecatch?: string; h2?: string[] };
-    const eyeTopic = (parsed.eyecatch || title).trim();
-    const h2Topics =
-      parsed.h2 && parsed.h2.length >= headings.length ? parsed.h2.slice(0, headings.length) : headings;
-    return {
-      eyecatch: nanoBananaPrompt(eyeTopic),
-      h2: h2Topics.map((t, i) => nanoBananaPrompt((t || headings[i] || '').trim())),
-    };
-  } catch (err) {
-    console.error('[buildOptimizedImagePrompts] fallback:', (err as Error).message);
-    return {
-      eyecatch: buildEyecatchPrompt({ title: opts.title, keywords: opts.keywords }),
-      h2: h2Texts.map((t) => buildH2Prompt({ h2Text: t, articleTitle: opts.title })),
-    };
-  }
+  return {
+    eyecatch: nanoBananaPrompt(title),
+    h2: h2Texts.map((t) => nanoBananaPrompt(sanitizeUserInput(t) || title)),
+  };
 }
 
-/** アイキャッチ用テンプレ（翻訳失敗時のフォールバック。topic は日本語のまま）。 */
+/** アイキャッチ用テンプレ（フォールバック）。タイトルを日本語のまま描画する。 */
 export function buildEyecatchPrompt(opts: { title: string; keywords: string[] }): string {
-  const topic = [opts.title, ...(opts.keywords || []).slice(0, 3)].filter(Boolean).join(' ');
-  return nanoBananaPrompt(topic);
+  return nanoBananaPrompt(opts.title);
 }
 
 /** h2 見出し用テンプレ（翻訳失敗時のフォールバック）。 */
