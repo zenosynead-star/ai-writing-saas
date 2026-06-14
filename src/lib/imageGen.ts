@@ -170,12 +170,36 @@ function errMsg(e: unknown): string {
   return (e instanceof Error ? e.message : String(e)).slice(0, 140);
 }
 
+// 画像API(Vertex Nano Banana Pro 等)の同時呼び出しを制限する。UI 同時実行を5に上げても、
+// 実際に並走する画像生成は最大 IMAGE_MAX_CONCURRENCY 個までに絞り、429(レート制限)の集中を防ぐ。
+// Nano Banana Pro はプレビュー枠でクォータが厳しいため既定 2（env IMAGE_MAX_CONCURRENCY で調整可）。
+const IMAGE_MAX_CONCURRENCY = Math.max(1, Number(process.env.IMAGE_MAX_CONCURRENCY) || 2);
+let imageActive = 0;
+const imageWaiters: Array<() => void> = [];
+async function withImageSlot<T>(fn: () => Promise<T>): Promise<T> {
+  if (imageActive >= IMAGE_MAX_CONCURRENCY) {
+    await new Promise<void>((resolve) => imageWaiters.push(resolve));
+  }
+  imageActive++;
+  try {
+    return await fn();
+  } finally {
+    imageActive--;
+    imageWaiters.shift()?.();
+  }
+}
+
 /**
- * 画像生成。既定は Vertex(Imagen 3 Fast) → Pollinations。
- * `IMAGE_PROVIDER=aistudio` の時のみ AI Studio → Vertex → Pollinations のチェーン。
- * いずれも最終的に **常に画像を返す**（「必ず画像」を担保）。
+ * 画像生成（公開API）。同時実行数を IMAGE_MAX_CONCURRENCY で絞ってから実体を呼ぶ。
+ * 既定は Vertex(Nano Banana Pro) → Pollinations。`IMAGE_PROVIDER=aistudio` の時のみ
+ * AI Studio → Vertex → Pollinations のチェーン。いずれも最終的に **常に画像を返す**。
  */
-export async function generateImage(opts: GenerateImageOptions): Promise<GenerateImageResult> {
+export function generateImage(opts: GenerateImageOptions): Promise<GenerateImageResult> {
+  return withImageSlot(() => generateImageInner(opts));
+}
+
+/** 画像生成の実体（プロバイダ選択＋フォールバックチェーン）。 */
+async function generateImageInner(opts: GenerateImageOptions): Promise<GenerateImageResult> {
   const provider =
     opts.provider ||
     (process.env.IMAGE_PROVIDER as 'aistudio' | 'vertex' | 'pollinations' | 'gemini' | undefined) ||

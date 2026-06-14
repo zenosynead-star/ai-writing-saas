@@ -304,10 +304,14 @@ function claudeCliGenerateInner(opts: GenerateOptions): Promise<GenerateResult> 
       : '');
 
   return new Promise<GenerateResult>((resolve, reject) => {
-    // --max-turns 1: 純粋なテキスト生成に限定（エージェント的なツール使用ループを禁止）。
-    //   これが無いと、要求の重いプロンプトで claude がツール実行を試みて headless 環境で
-    //   停滞し（num_turns:2 / API時間ごく僅か / 実時間数分 → SIGTERM=exit143）本文生成が失敗する。
-    const args = ['-p', '--output-format', 'json', '--model', model, '--max-turns', '1'];
+    // 純粋なテキスト生成に限定する（エージェント的なツール使用を完全に禁止）。
+    //   決め手は --tools ''（利用可能ツールを空にする）。--max-turns 1 だけでは、モデルが
+    //   ツール使用を選んだ瞬間に「結果を取り込む2ターン目」が必要になり error_max_turns で
+    //   失敗する（VPS実機検証: max-turns1のみ=error_max_turns/result空、--tools ''=num_turns1で成功）。
+    //   --disallowedTools では「ツール試行→拒否」で依然ターンを消費し失敗するため不可。
+    //   ツールを一切与えなければ headless でも必ず1ターンのテキスト応答に収束する。
+    //   （旧症状: 重い本文プロンプトでツールに走り num_turns:2・数分停滞→SIGTERM/exit143→500）
+    const args = ['-p', '--output-format', 'json', '--model', model, '--max-turns', '1', '--tools', ''];
     let child;
     try {
       child = spawn(bin, args, {
