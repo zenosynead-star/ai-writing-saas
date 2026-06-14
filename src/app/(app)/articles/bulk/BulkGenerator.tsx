@@ -108,6 +108,17 @@ export default function BulkGenerator() {
           return;
         }
         title = data.title;
+        // 生成が不完全（簡易内容のフォールバック）の場合は、画像課金・空公開を避けてスキップ
+        if (data.degraded) {
+          setRows((prev) =>
+            prev.map((r) =>
+              r.articleId === aid
+                ? { ...r, status: 'done', title, error: '生成が簡易内容のため画像・公開をスキップ（再生成推奨）' }
+                : r,
+            ),
+          );
+          return;
+        }
       } catch (e) {
         setRows((prev) => prev.map((r) => (r.articleId === aid ? { ...r, status: 'failed', error: (e as Error).message } : r)));
         return;

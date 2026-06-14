@@ -75,6 +75,45 @@ const toStr = (v: unknown, fallback: string | null): string | null => {
   }
 };
 
+/**
+ * 1段階の生成を最大 attempts 回までリトライする（「時間がかかってもエラーを出さず最後まで」方針）。
+ * すべて失敗したら例外を投げず null を返し、呼び出し側がフォールバックで処理を続行する。
+ */
+async function tryGen<T>(label: string, attempts: number, fn: () => Promise<T>): Promise<T | null> {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      console.warn(`[auto] ${label} 試行 ${i + 1}/${attempts} 失敗: ${((e as Error).message || '').slice(0, 160)}`);
+      if (i < attempts - 1) await new Promise((r) => setTimeout(r, 2000 * (i + 1)));
+    }
+  }
+  return null;
+}
+
+/** 見出し生成が失敗したときの既定の汎用構成（本文生成を止めないためのフォールバック）。 */
+function defaultHeadingTree(keywords: string[]): HeadingNode[] {
+  const kw = (keywords[0] || 'この商品').trim();
+  return [
+    { level: 2, text: `${kw}とは？基礎知識`, children: [] },
+    { level: 2, text: `${kw}の選び方・比較ポイント`, children: [] },
+    { level: 2, text: `${kw}のおすすめ`, children: [] },
+    { level: 2, text: `${kw}の使い方・注意点`, children: [] },
+    { level: 2, text: `よくある質問（FAQ）`, children: [] },
+    { level: 2, text: `まとめ`, children: [] },
+  ];
+}
+
+/** 本文生成が完全に失敗したときの最小スケルトン（増補パスで肉付けされる・エラーで止めないための保険）。 */
+function skeletonBody(tree: HeadingNode[], title: string): string {
+  const lead = `<p>${title}について、選び方やおすすめのポイントを解説します。</p>`;
+  const secs = tree
+    .filter((n) => n.level === 2)
+    .map((n) => `<h2>${n.text}</h2>\n<p>${n.text}について、要点を整理して具体的に解説します。</p>`)
+    .join('\n');
+  return `${lead}\n${secs}`;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const user = await getCurrentUser();
@@ -90,143 +129,190 @@ export async function POST(req: NextRequest) {
 
     await prisma.article.update({ where: { id: articleId }, data: { status: 'generating' } });
 
-    try {
-      // ===== 1. タイトル =====
-      const titleRes = await generate({
+    // 「時間がかかってもエラーを出さず最後まで処理」方針:
+    // 各段階はリトライ＋フォールバックで進め、途中失敗しても 500 を返さず必ず completed にする。
+    const fallbackTitle = keywords.join(' ');
+
+    // ===== 1. タイトル（失敗時はキーワードをタイトルに）=====
+    let title = fallbackTitle;
+    const titleRes = await tryGen('title', 3, () =>
+      generate({
         logicalModel, taskType: 'title', system: BASE_SYSTEM,
         user: TITLE_GENERATION_PROMPT({ keywords, persona: '自動推定' }),
         maxTokens: 4000, jsonMode: true,
-      });
-      const titleJson = extractJson<{ titles: TitleResult[] }>(titleRes.content);
-      const title = titleJson.titles?.[0]?.title || keywords.join(' ');
+      }),
+    );
+    if (titleRes) {
+      try {
+        const tj = extractJson<{ titles: TitleResult[] }>(titleRes.content);
+        title = tj.titles?.[0]?.title || fallbackTitle;
+      } catch { /* フォールバックのまま */ }
+    }
 
-      // ===== 2. 競合分析 + 見出し =====
-      let competitorHeadings: string | undefined;
-      let cooccurrenceWords: string[] | undefined;
-      let avgWordCount: number | undefined;
-      let commonTopics: string[] | undefined;
-      let maxHeadingCount: number | undefined;
-      if (useCompetitorAnalysis !== false) {
-        try {
-          const a = await analyzeCompetitors(keywords.join(' '), { maxPages: 8 });
-          if (a.competitorHeadingsText) competitorHeadings = a.competitorHeadingsText;
-          if (a.cooccurrenceWords.length) cooccurrenceWords = a.cooccurrenceWords;
-          if (a.avgWordCount) avgWordCount = a.avgWordCount;
-          if (a.commonTopics.length) commonTopics = a.commonTopics;
-          if (a.maxHeadingCount) maxHeadingCount = a.maxHeadingCount;
-        } catch (e) {
-          console.warn('[auto] competitor analysis skipped:', (e as Error).message);
-        }
+    // ===== 2. 競合分析（任意・失敗は握りつぶし、取れた結果だけ使う）=====
+    let competitorHeadings: string | undefined;
+    let cooccurrenceWords: string[] | undefined;
+    let avgWordCount: number | undefined;
+    let commonTopics: string[] | undefined;
+    let maxHeadingCount: number | undefined;
+    if (useCompetitorAnalysis !== false) {
+      try {
+        const a = await analyzeCompetitors(keywords.join(' '), { maxPages: 8 });
+        if (a.competitorHeadingsText) competitorHeadings = a.competitorHeadingsText;
+        if (a.cooccurrenceWords.length) cooccurrenceWords = a.cooccurrenceWords;
+        if (a.avgWordCount) avgWordCount = a.avgWordCount;
+        if (a.commonTopics.length) commonTopics = a.commonTopics;
+        if (a.maxHeadingCount) maxHeadingCount = a.maxHeadingCount;
+      } catch (e) {
+        console.warn('[auto] competitor analysis skipped:', (e as Error).message);
       }
-      // 手動指定があれば競合分析より優先（検索が全滅していても確実に長文を狙える）。
-      const targetChars = targetCharsOverride
-        ? clampTargetChars(targetCharsOverride)
-        : computeTargetChars(avgWordCount);
-      const headRes = await generate({
+    }
+    // 目標文字数: 手動指定 > 競合平均×1.3(自動) > 下限。競合が長ければ自動で大きくなる(最大6万字)。
+    const targetChars = targetCharsOverride
+      ? clampTargetChars(targetCharsOverride)
+      : computeTargetChars(avgWordCount);
+
+    // ===== 3. 見出し（失敗・不正時は既定の汎用構成にフォールバック）=====
+    let headTree: HeadingNode[] = [];
+    let persona: string | null = '自動推定';
+    let searchIntent: string | null = 'informational';
+    let latentNeeds: string[] = [];
+    const headRes = await tryGen('headings', 3, () =>
+      generate({
         logicalModel, taskType: 'heading', system: BASE_SYSTEM,
         user: HEADING_GENERATION_PROMPT({ keywords, competitorHeadings, cooccurrenceWords, avgWordCount, maxHeadingCount, commonTopics }),
         maxTokens: 8000, jsonMode: true,
-      });
-      const headJson = extractJson<HeadingResult>(headRes.content);
-      if (!validateHeadingTree(headJson.headings)) {
-        throw new Error('見出し構造が不正でした');
+      }),
+    );
+    if (headRes) {
+      try {
+        const hj = extractJson<HeadingResult>(headRes.content);
+        if (validateHeadingTree(hj.headings)) {
+          headTree = hj.headings;
+          persona = toStr(hj.estimated_persona, '自動推定');
+          searchIntent = toStr(hj.search_intent, 'informational');
+          latentNeeds = Array.isArray(hj.latent_needs) ? hj.latent_needs : [];
+        }
+      } catch (e) {
+        console.warn('[auto] heading parse failed → 既定構成にフォールバック:', (e as Error).message);
       }
-      await saveHeadingTree(articleId, headJson.headings);
-      const persona = toStr(headJson.estimated_persona, '自動推定');
-      const searchIntent = toStr(headJson.search_intent, 'informational');
-      const latentNeeds = Array.isArray(headJson.latent_needs) ? headJson.latent_needs : [];
+    }
+    if (headTree.length === 0) headTree = defaultHeadingTree(keywords);
+    await saveHeadingTree(articleId, headTree).catch((e) => console.warn('[auto] saveHeadingTree:', (e as Error).message));
 
-      await prisma.article.update({
+    await prisma.article
+      .update({
         where: { id: articleId },
         data: {
           title, persona, searchIntent,
           latentNeeds: JSON.stringify(latentNeeds),
           cooccurrenceWords: cooccurrenceWords ? JSON.stringify(cooccurrenceWords) : null,
         },
-      });
+      })
+      .catch(() => {});
 
-      // ===== 2.5 おすすめ商品ルール: サイト(既定の WpConnection)単位でキーワードから推奨商品を決定 =====
-      let featuredProductId: string | null = null;
-      let recommendedProduct: string | undefined;
-      try {
-        // 公開時の既定接続(publish と同じ isDefault:true)のルールで解決し、
-        // 生成時と公開時で推奨商品サイトが食い違わないようにする。
-        // 既定接続が無ければ featuredProductId は null のままにし、公開時に公開先サイトのルールで解決させる。
-        const conn = await prisma.wpConnection.findFirst({
-          where: { userId: user.id, isDefault: true },
+    // ===== 3.5 おすすめ商品ルール（既定接続のルールで推奨商品を決定）=====
+    let featuredProductId: string | null = null;
+    let recommendedProduct: string | undefined;
+    try {
+      const conn = await prisma.wpConnection.findFirst({ where: { userId: user.id, isDefault: true } });
+      if (conn) {
+        const rules = await prisma.productRule.findMany({ where: { wpConnectionId: conn.id } });
+        featuredProductId = pickProductId({
+          keywords,
+          title,
+          rules: rules.map((r) => ({ keyword: r.keyword, productId: r.productId, enabled: r.enabled, order: r.order })),
+          defaultProductId: conn.defaultProductId,
         });
-        if (conn) {
-          const rules = await prisma.productRule.findMany({ where: { wpConnectionId: conn.id } });
-          featuredProductId = pickProductId({
-            keywords,
-            title,
-            rules: rules.map((r) => ({ keyword: r.keyword, productId: r.productId, enabled: r.enabled, order: r.order })),
-            defaultProductId: conn.defaultProductId,
-          });
-          recommendedProduct = buildRecommendedProductBrief(getProductById(featuredProductId));
-        }
-      } catch (e) {
-        console.warn('[auto] product rule resolution skipped:', (e as Error).message);
+        recommendedProduct = buildRecommendedProductBrief(getProductById(featuredProductId));
       }
+    } catch (e) {
+      console.warn('[auto] product rule resolution skipped:', (e as Error).message);
+    }
 
-      // ===== 3. 本文 =====
-      let webContext: string | undefined;
-      if (useWebSearch || article.useWebSearch) {
+    // ===== 4. 本文（失敗時は見出しからスケルトンを作って続行）=====
+    let webContext: string | undefined;
+    if (useWebSearch || article.useWebSearch) {
+      try {
         const web = await fetchWebContext(`${title} ${keywords.join(' ')}`);
         if (web) webContext = `【Web検索で取得した最新情報】\n${web}`;
+      } catch (e) {
+        console.warn('[auto] fetchWebContext skipped:', (e as Error).message);
       }
-      if (article.referenceInfo?.trim()) {
-        webContext = `【ユーザー提供の参考情報（最優先）】\n${article.referenceInfo.trim()}` + (webContext ? `\n\n${webContext}` : '');
-      }
-      // 内部リンク用の関連記事(他記事 最大20件)
+    }
+    if (article.referenceInfo?.trim()) {
+      webContext = `【ユーザー提供の参考情報（最優先）】\n${article.referenceInfo.trim()}` + (webContext ? `\n\n${webContext}` : '');
+    }
+    let relatedArticles: Array<{ id: string; title: string }> = [];
+    try {
       const siblings = await prisma.article.findMany({
         where: { userId: user.id, id: { not: articleId }, title: { not: '' } },
         select: { id: true, title: true },
         orderBy: [{ status: 'asc' }, { updatedAt: 'desc' }],
         take: 20,
       });
-      const relatedArticles = siblings.map((s) => ({ id: s.id, title: s.title }));
+      relatedArticles = siblings.map((s) => ({ id: s.id, title: s.title }));
+    } catch { /* 内部リンク無しで続行 */ }
 
-      const bodyRes = await generate({
+    const bodyRes = await tryGen('body', 5, () =>
+      generate({
         logicalModel, taskType: 'body', system: BASE_SYSTEM,
         user: BODY_GENERATION_PROMPT({
           keywords, title, persona: persona || '自動推定',
           searchIntent: searchIntent || 'informational', latentNeeds,
-          headingTree: headingTreeToText(headJson.headings),
+          headingTree: headingTreeToText(headTree),
           toneSample: article.toneSample || undefined,
           volumeSpec: article.volumeSpec || undefined,
           cooccurrenceWords, webContext, relatedArticles,
           targetChars, competitorHeadings, commonTopics, recommendedProduct,
         }),
         maxTokens: 16000, temperature: 0.65,
-      });
-      const extracted = extractMeta(bodyRes.content);
-      // 競合超えの分量・網羅に満たなければ自動増補（既存構造は保持）。
-      // 目標<=12000は本文全体を複数パス、>12000はh2セクション単位で増補する（bodyExpand 側で分岐）。
-      const exp = await expandBodyIfShort({
-        html: extracted.html, title, targetChars, commonTopics, logicalModel,
-      });
-      const html = exp.html;
-      const meta = extracted.meta;
+      }),
+    );
+    const modelUsed = bodyRes?.actualModel || 'fallback-skeleton';
+    let extracted = bodyRes ? extractMeta(bodyRes.content) : { html: '', meta: '' };
+    if (!extracted.html.trim()) extracted = { html: skeletonBody(headTree, title), meta: extracted.meta };
 
-      await prisma.article.update({
-        where: { id: articleId },
-        data: { bodyHtml: html, metaDescription: meta, modelUsed: bodyRes.actualModel, status: 'completed', step: 5, featuredProductId },
-      });
-
-      return NextResponse.json({
-        ok: true, articleId, title,
-        headings: headJson.headings.length,
-        bodyChars: exp.finalChars,
-        targetChars,
-        expandPasses: exp.passes,
-        model: bodyRes.actualModel,
-        featuredProductId,
-      });
-    } catch (err) {
-      await prisma.article.update({ where: { id: articleId }, data: { status: 'failed' } }).catch(() => {});
-      throw err;
+    // 競合超えの分量・網羅に満たなければ自動増補（目標>12000はh2セクション単位＝5万字級も可）。失敗しても現状維持で続行。
+    let exp = { html: extracted.html, passes: 0, finalChars: 0 };
+    try {
+      exp = await expandBodyIfShort({ html: extracted.html, title, targetChars, commonTopics, logicalModel });
+    } catch (e) {
+      console.warn('[auto] expand skipped:', (e as Error).message);
+      exp = {
+        html: extracted.html,
+        passes: 0,
+        finalChars: extracted.html.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().length,
+      };
     }
+    const html = exp.html;
+    const meta = extracted.meta;
+
+    // 本文生成が全失敗し、増補でも実体が付かず最終文字数が極端に短い場合は degraded。
+    // 「エラーを出さず最後まで」方針なので HTTP は 200 で返すが、status は completed にせず failed にして
+    //   - 記事一覧で「完成」と誤認させない
+    //   - 一括フローの自動公開（公開APIの最小文字数ガードと併せた二重防御）に乗せない
+    // ようにする。見出しだけ既定構成に落ちても本文が十分なら通常の completed。
+    const MIN_BODY_CHARS = 1200;
+    const degraded = exp.finalChars < MIN_BODY_CHARS;
+    const finalStatus = degraded ? 'failed' : 'completed';
+
+    await prisma.article.update({
+      where: { id: articleId },
+      data: { bodyHtml: html, metaDescription: meta, modelUsed, status: finalStatus, step: 5, featuredProductId },
+    });
+
+    return NextResponse.json({
+      ok: true, articleId, title,
+      status: finalStatus,
+      headings: headTree.length,
+      bodyChars: exp.finalChars,
+      targetChars,
+      expandPasses: exp.passes,
+      model: modelUsed,
+      featuredProductId,
+      degraded,
+    });
   } catch (err) {
     console.error('[auto]', err);
     const { status, body } = llmErrorToResponse(err);

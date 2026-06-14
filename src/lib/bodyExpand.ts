@@ -1,8 +1,8 @@
 /**
  * 本文の「競合超え」ボリューム制御（自動増補）。
  *
- * - computeTargetChars: 競合平均文字数 ×1.3 と下限 3500 の大きい方（上限 50000）を目標に。
- * - clampTargetChars: UI の手動指定値を許容範囲 [3500, 50000] に丸める。
+ * - computeTargetChars: 競合平均文字数 ×1.3 と下限 3500 の大きい方（上限 60000）を目標に。
+ * - clampTargetChars: UI の手動指定値を許容範囲 [3500, 60000] に丸める。
  * - expandBodyIfShort: 生成本文が目標未満なら増補する。
  *     - 小〜中目標(<=12000): 本文全体を渡して増補（従来方式）。
  *     - 大目標(>12000): h2 セクション単位で分割増補。1回の claude 出力上限(数千字)を
@@ -13,17 +13,17 @@ import { generate, BASE_SYSTEM, type LogicalModel } from './llm';
 import { EXPAND_BODY_PROMPT, EXPAND_SECTION_PROMPT } from './prompts';
 
 const FLOOR = 3500;
-const CEIL = 50000;
+const CEIL = 60000;
 /** これを超える目標はセクション単位増補に切替（whole-doc だと1回の出力上限を超え失敗するため）。 */
 const SECTION_MODE_THRESHOLD = 12000;
 
-/** 目標文字数 = max(競合平均 ×1.3, 3500)、上限 50000。 */
+/** 目標文字数 = max(競合平均 ×1.3, 3500)、上限 60000。 */
 export function computeTargetChars(avgWordCount?: number): number {
   const fromCompetitor = avgWordCount && avgWordCount > 0 ? Math.round(avgWordCount * 1.3) : 0;
   return Math.min(Math.max(fromCompetitor, FLOOR), CEIL);
 }
 
-/** UI の手動指定目標文字数を許容範囲 [3500, 50000] に丸める（未指定/不正は下限）。 */
+/** UI の手動指定目標文字数を許容範囲 [3500, 60000] に丸める（未指定/不正は下限）。 */
 export function clampTargetChars(n?: number): number {
   if (!n || n <= 0 || Number.isNaN(n)) return FLOOR;
   return Math.min(Math.max(Math.round(n), FLOOR), CEIL);

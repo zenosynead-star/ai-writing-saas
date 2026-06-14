@@ -155,63 +155,77 @@ async function googleCseSearch(query: string, count: number): Promise<SearchHit[
  * 専用の検索 API キー不要で、記事生成に使う GOOGLE_API_KEY をそのまま流用できる。
  * 返る URI は vertexaisearch のリダイレクト URL だが、fetchPage(redirect:follow) で実ページに解決される。
  */
+/** GOOGLE_API_KEY と GOOGLE_API_KEY_2..9 を集める（キー枯渇時のローテーション用）。 */
+function googleApiKeys(): string[] {
+  const keys: string[] = [];
+  if (process.env.GOOGLE_API_KEY) keys.push(process.env.GOOGLE_API_KEY);
+  for (let i = 2; i <= 9; i++) {
+    const k = process.env[`GOOGLE_API_KEY_${i}`];
+    if (k) keys.push(k);
+  }
+  return keys;
+}
+
 async function geminiGroundingSearch(query: string): Promise<SearchHit[] | null> {
-  const key = process.env.GOOGLE_API_KEY || process.env.GOOGLE_API_KEY_2;
-  if (!key) return null;
+  const keys = googleApiKeys();
+  if (keys.length === 0) return null;
 
   const model = process.env.GROUNDING_MODEL || 'gemini-2.5-flash';
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
   const body = {
     contents: [{ role: 'user', parts: [{ text: `「${query}」で検索し、上位の解説・比較記事のURLを列挙してください。` }] }],
     tools: [{ google_search: {} }],
   };
 
-  // 503(高負荷)/ 429(レート) は短い指数バックオフでリトライ
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), 20_000);
-    try {
-      const resp = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: ac.signal,
-      });
-      if (!resp.ok) {
-        const retryable = resp.status === 503 || resp.status === 429 || resp.status >= 500;
-        console.warn(`[competitorAnalysis] Gemini grounding ${resp.status} (attempt ${attempt + 1}): ${(await resp.text()).slice(0, 120)}`);
-        if (retryable && attempt < 2) {
-          await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+  // キーをローテーション: 各キーで 503(高負荷)は1回バックオフ、429/quota は即次のキーへ。
+  // 「時間がかかってもよい」方針なので、複数キーがあれば順に試して競合データ取得の成功率を上げる。
+  for (let ki = 0; ki < keys.length; ki++) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${keys[ki]}`;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), 20_000);
+      try {
+        const resp = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: ac.signal,
+        });
+        if (!resp.ok) {
+          console.warn(`[competitorAnalysis] Gemini grounding ${resp.status} (key ${ki + 1}/${keys.length}, attempt ${attempt + 1}): ${(await resp.text()).slice(0, 100)}`);
+          if (resp.status === 503 && attempt < 1) {
+            await new Promise((r) => setTimeout(r, 2000));
+            continue;
+          }
+          break; // 429/その他 → 次のキーへ
+        }
+        const data = (await resp.json()) as {
+          candidates?: Array<{
+            groundingMetadata?: {
+              groundingChunks?: Array<{ web?: { uri?: string; title?: string } }>;
+            };
+          }>;
+        };
+        const chunks = data.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+        const hits: SearchHit[] = [];
+        const seen = new Set<string>();
+        for (const c of chunks) {
+          const uri = c.web?.uri;
+          if (!uri || seen.has(uri)) continue;
+          seen.add(uri);
+          hits.push({ url: uri, title: c.web?.title || '' });
+        }
+        if (hits.length > 0) return hits;
+        break; // 0件 → 次のキーへ
+      } catch (e) {
+        console.warn(`[competitorAnalysis] Gemini grounding failed (key ${ki + 1}/${keys.length}, attempt ${attempt + 1}):`, (e as Error).message);
+        if (attempt < 1) {
+          await new Promise((r) => setTimeout(r, 2000));
           continue;
         }
-        return null;
+        break;
+      } finally {
+        clearTimeout(timer);
       }
-      const data = (await resp.json()) as {
-        candidates?: Array<{
-          groundingMetadata?: {
-            groundingChunks?: Array<{ web?: { uri?: string; title?: string } }>;
-          };
-        }>;
-      };
-      const chunks = data.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-      const hits: SearchHit[] = [];
-      const seen = new Set<string>();
-      for (const c of chunks) {
-        const uri = c.web?.uri;
-        if (!uri || seen.has(uri)) continue;
-        seen.add(uri);
-        hits.push({ url: uri, title: c.web?.title || '' });
-      }
-      return hits;
-    } catch (e) {
-      console.warn(`[competitorAnalysis] Gemini grounding failed (attempt ${attempt + 1}):`, (e as Error).message);
-      if (attempt < 2) {
-        await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
-        continue;
-      }
-      return null;
-    } finally {
-      clearTimeout(timer);
     }
   }
   return null;
@@ -383,10 +397,9 @@ function formatCompetitorHeadings(parsed: Array<{ url: string; article: ParsedAr
  * Web検索 ON のときに本文プロンプトの webContext に注入する。
  */
 export async function fetchWebContext(query: string): Promise<string> {
-  const key = process.env.GOOGLE_API_KEY || process.env.GOOGLE_API_KEY_2;
-  if (!key) return '';
+  const keys = googleApiKeys();
+  if (keys.length === 0) return '';
   const model = process.env.GROUNDING_MODEL || 'gemini-2.5-flash';
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
   const body = {
     contents: [
       {
@@ -400,36 +413,41 @@ export async function fetchWebContext(query: string): Promise<string> {
     ],
     tools: [{ google_search: {} }],
   };
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), 25_000);
-  try {
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: ac.signal,
-    });
-    if (!resp.ok) return '';
-    const data = (await resp.json()) as {
-      candidates?: Array<{
-        content?: { parts?: Array<{ text?: string }> };
-        groundingMetadata?: { groundingChunks?: Array<{ web?: { title?: string } }> };
-      }>;
-    };
-    const cand = data.candidates?.[0];
-    const text = (cand?.content?.parts || []).map((p) => p.text || '').join('').trim();
-    const sources = (cand?.groundingMetadata?.groundingChunks || [])
-      .map((c) => c.web?.title)
-      .filter(Boolean)
-      .slice(0, 5);
-    if (!text) return '';
-    const srcLine = sources.length ? `\n参照: ${sources.join(' / ')}` : '';
-    return `${text}${srcLine}`.slice(0, 3000);
-  } catch {
-    return '';
-  } finally {
-    clearTimeout(timer);
+  // キーをローテーション（429/エラーは次のキーへ）。すべて失敗しても '' を返し本文生成は続行。
+  for (const key of keys) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 25_000);
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: ac.signal,
+      });
+      if (!resp.ok) continue;
+      const data = (await resp.json()) as {
+        candidates?: Array<{
+          content?: { parts?: Array<{ text?: string }> };
+          groundingMetadata?: { groundingChunks?: Array<{ web?: { title?: string } }> };
+        }>;
+      };
+      const cand = data.candidates?.[0];
+      const text = (cand?.content?.parts || []).map((p) => p.text || '').join('').trim();
+      const sources = (cand?.groundingMetadata?.groundingChunks || [])
+        .map((c) => c.web?.title)
+        .filter(Boolean)
+        .slice(0, 5);
+      if (!text) continue;
+      const srcLine = sources.length ? `\n参照: ${sources.join(' / ')}` : '';
+      return `${text}${srcLine}`.slice(0, 3000);
+    } catch {
+      continue;
+    } finally {
+      clearTimeout(timer);
+    }
   }
+  return '';
 }
 
 /**

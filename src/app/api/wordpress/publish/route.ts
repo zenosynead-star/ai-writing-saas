@@ -83,6 +83,21 @@ export async function POST(req: NextRequest) {
     if (!article) return NextResponse.json({ error: 'Article not found' }, { status: 404 });
     if (!article.bodyHtml) return NextResponse.json({ error: '本文が未生成です' }, { status: 400 });
 
+    // 本文が極端に短い（＝自動生成のフォールバック・スケルトンしか入っていない）記事は公開しない。
+    // 生成APIは「エラーを出さず最後まで」方針で degraded でも completed 保存するため、
+    // 中身の無い記事が自動公開フローでそのまま本番公開される事故を公開段で防ぐ。
+    const MIN_PUBLISH_CHARS = 1200;
+    const plainBodyLen = article.bodyHtml.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().length;
+    if (plainBodyLen < MIN_PUBLISH_CHARS) {
+      return NextResponse.json(
+        {
+          error: `本文の生成が不完全なため公開を中止しました（本文約${plainBodyLen}文字）。再生成してから公開してください。`,
+          degraded: true,
+        },
+        { status: 400 },
+      );
+    }
+
     // 画像必須: 1枚も無ければ公開しない（「必ず画像を入れる」運用）
     if (requireImages && !article.articleImages.some((i) => i.kind === 'eyecatch' || i.kind === 'h2')) {
       return NextResponse.json(
