@@ -6,8 +6,11 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  // 実行時は pooler(PgBouncer) 経由でアイドル切断(E57P01)を回避。
+  url       = env("DATABASE_URL")
+  // マイグレーション/db push は直結が必要なため directUrl を分離。
+  directUrl = env("DATABASE_URL_DIRECT")
 }
 
 model Plan {

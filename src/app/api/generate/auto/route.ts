@@ -4,7 +4,7 @@ import { prisma } from '@/lib/db';
 import { generate, extractJson, BASE_SYSTEM, llmErrorToResponse } from '@/lib/llm';
 import { TITLE_GENERATION_PROMPT, HEADING_GENERATION_PROMPT, BODY_GENERATION_PROMPT } from '@/lib/prompts';
 import { analyzeCompetitors, fetchWebContext } from '@/lib/competitorAnalysis';
-import { computeTargetChars, expandBodyIfShort } from '@/lib/bodyExpand';
+import { computeTargetChars, clampTargetChars, expandBodyIfShort } from '@/lib/bodyExpand';
 import { validateHeadingTree } from '@/lib/headings';
 import { z } from 'zod';
 
@@ -17,6 +17,8 @@ const Schema = z.object({
   useCompetitorAnalysis: z.boolean().optional(),
   useWebSearch: z.boolean().optional(),
   model: z.enum(['low_cost', 'balanced', 'high_quality']).optional(),
+  /** 手動の目標文字数（指定時は競合分析より優先。[3500,50000] にクランプ）。 */
+  targetCharsOverride: z.number().int().positive().max(60000).optional(),
 });
 
 interface TitleResult { title: string }
@@ -77,7 +79,7 @@ export async function POST(req: NextRequest) {
     const user = await getCurrentUser();
     const parsed = Schema.safeParse(await req.json());
     if (!parsed.success) return NextResponse.json({ error: 'リクエストが不正です' }, { status: 400 });
-    const { articleId, useCompetitorAnalysis, useWebSearch, model } = parsed.data;
+    const { articleId, useCompetitorAnalysis, useWebSearch, model, targetCharsOverride } = parsed.data;
     const logicalModel = model ?? 'balanced';
 
     const article = await prisma.article.findFirst({ where: { id: articleId, userId: user.id } });
@@ -115,7 +117,10 @@ export async function POST(req: NextRequest) {
           console.warn('[auto] competitor analysis skipped:', (e as Error).message);
         }
       }
-      const targetChars = computeTargetChars(avgWordCount);
+      // 手動指定があれば競合分析より優先（検索が全滅していても確実に長文を狙える）。
+      const targetChars = targetCharsOverride
+        ? clampTargetChars(targetCharsOverride)
+        : computeTargetChars(avgWordCount);
       const headRes = await generate({
         logicalModel, taskType: 'heading', system: BASE_SYSTEM,
         user: HEADING_GENERATION_PROMPT({ keywords, competitorHeadings, cooccurrenceWords, avgWordCount, maxHeadingCount, commonTopics }),
@@ -171,7 +176,8 @@ export async function POST(req: NextRequest) {
         maxTokens: 16000, temperature: 0.65,
       });
       const extracted = extractMeta(bodyRes.content);
-      // 競合超えの分量・網羅に満たなければ自動増補（最大2回・既存構造は保持）
+      // 競合超えの分量・網羅に満たなければ自動増補（既存構造は保持）。
+      // 目標<=12000は本文全体を複数パス、>12000はh2セクション単位で増補する（bodyExpand 側で分岐）。
       const exp = await expandBodyIfShort({
         html: extracted.html, title, targetChars, commonTopics, logicalModel,
       });

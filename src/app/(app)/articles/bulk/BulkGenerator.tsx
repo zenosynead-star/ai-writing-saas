@@ -27,6 +27,7 @@ export default function BulkGenerator() {
   const [parallelism, setParallelism] = useState(3);
   const [imageMode, setImageMode] = useState<ImageMode>('none');
   const [wpPublish, setWpPublish] = useState<WpPublish>('none');
+  const [targetChars, setTargetChars] = useState<number>(0); // 0 = 自動（競合分析ベース）
   const [error, setError] = useState<string | null>(null);
 
   const keywords = input
@@ -99,7 +100,7 @@ export default function BulkGenerator() {
         const res = await fetch('/api/generate/auto', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ articleId: aid, useCompetitorAnalysis: useCompetitor, useWebSearch, model }),
+          body: JSON.stringify({ articleId: aid, useCompetitorAnalysis: useCompetitor, useWebSearch, model, targetCharsOverride: targetChars || undefined }),
         });
         const data = await res.json();
         if (!res.ok) {
@@ -296,6 +297,23 @@ export default function BulkGenerator() {
               ))}
             </div>
           </div>
+          <div>
+            <span className="label">目標文字数</span>
+            <div className="flex gap-1.5">
+              {([[0, '自動'], [10000, '1万字'], [20000, '2万字'], [30000, '3万字'], [50000, '5万字']] as const).map(([v, l]) => (
+                <button
+                  key={v}
+                  onClick={() => setTargetChars(v)}
+                  disabled={running}
+                  className={`px-3 py-1.5 rounded-[5px] text-sm font-bold border ${
+                    targetChars === v ? 'bg-teal text-white border-teal' : 'bg-white text-navy border-line hover:bg-bluepaper'
+                  }`}
+                >
+                  {l}
+                </button>
+              ))}
+            </div>
+          </div>
           <label className="flex items-center gap-2 text-sm mt-5">
             <input type="checkbox" checked={useCompetitor} onChange={(e) => setUseCompetitor(e.target.checked)} disabled={running} className="accent-teal w-4 h-4" />
             <span className="font-bold text-navy">競合分析</span>
@@ -335,6 +353,20 @@ export default function BulkGenerator() {
         {parallelism >= 4 && (
           <p className="text-xs text-amber-600">
             ※ 同時実行数が多いほど Claude の利用上限・サーバー負荷に当たりやすくなります。失敗が増えたら数を下げてください。
+          </p>
+        )}
+        {targetChars >= 30000 && (
+          <p className="text-xs text-amber-600">
+            ※ 目標文字数{Math.round(targetChars / 10000)}万字: h2セクション単位で多段増補するため、1記事の生成に10〜20分かかります。同時実行数は低め（2〜3）推奨。
+          </p>
+        )}
+        {targetChars === 0 ? (
+          <p className="text-xs text-sub">
+            ※ 目標文字数「自動」: 競合分析の平均文字数×1.3（競合が取得できない場合は約3,500字）。長文を確実に出すには文字数を指定してください。
+          </p>
+        ) : (
+          <p className="text-xs text-sub">
+            ※ 目標文字数 {targetChars.toLocaleString()} 字を必達目標に多段増補します（競合分析の結果より優先）。
           </p>
         )}
         {skipPublished && !running && (
