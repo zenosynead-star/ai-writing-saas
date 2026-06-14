@@ -1,7 +1,8 @@
 /**
  * 画像生成プロバイダー切替対応のラッパー。
  *
- * 既定(本番): Vertex AI `gemini-3.1-flash-image` (Nano Banana 2) — 日本語ネイティブ・高品質。
+ * 既定(本番): Vertex AI `imagen-3.0-fast-generate-001` (Imagen 3 Fast) — 本番
+ * (wp-article-rewriter) の公開記事と同一モデル。安価・高速・クリーンなイラストに最適。
  * フォールバック: Pollinations.ai (無料・Flux) — Vertex 終端失敗時にも「必ず画像」を出すため。
  * スタイルは wp-article-rewriter の本番プロンプト準拠（クリーンなフラット・インフォグラフィック
  * イラスト、画像内テキストなし）。旧 Imagen4 + Canvas タイトル合成方式は廃止。
@@ -13,7 +14,7 @@ import { generateVertexImage, VertexImageError } from './vertexImageGen';
 export interface GenerateImageOptions {
   prompt: string;
   aspectRatio?: string;
-  /** 'vertex' = Vertex gemini-3.1-flash-image(本命) / 'gemini' = AI Studio / 'pollinations' = 無料Flux */
+  /** 'vertex' = Vertex Imagen(本命, 既定 imagen-3.0-fast) / 'gemini' = AI Studio / 'pollinations' = 無料Flux */
   provider?: 'vertex' | 'pollinations' | 'gemini';
   pollModel?: string;
   seed?: number;
@@ -140,7 +141,7 @@ async function generateWithGemini(opts: GenerateImageOptions): Promise<GenerateI
 }
 
 /**
- * 画像生成。既定は Vertex(gemini-3.1-flash-image)。Vertex が終端失敗しても
+ * 画像生成。既定は Vertex(Imagen 3 Fast)。Vertex が終端失敗しても
  * Pollinations へフォールバックして **常に画像を返す**（「必ず画像」を担保）。
  */
 export async function generateImage(opts: GenerateImageOptions): Promise<GenerateImageResult> {

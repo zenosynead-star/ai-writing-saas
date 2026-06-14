@@ -7,10 +7,11 @@
  *
  * 認証: Service Account JSON → OAuth 2.0 access token → Bearer header
  *
- * 既定モデル: gemini-3.1-flash-image (Nano Banana 2) — 日本語ネイティブ・高品質。
- * VERTEX_IMAGE_MODEL で上書き可。imagen-* を指定すると predict 形式に自動切替:
+ * 既定モデル: imagen-3.0-fast-generate-001 (Imagen 3 Fast) — 本番(wp-article-rewriter)の
+ * 公開記事と同一モデル。クリーンなフラットイラスト系プロンプトと相性が良く安価・高速。
+ * VERTEX_IMAGE_MODEL で上書き可。imagen-* は predict 形式、gemini-*-image は generateContent 形式。
+ *   - imagen-3.0-fast-generate-001: $0.02/画像、~3秒 (既定)
  *   - imagen-4.0-fast-generate-001: $0.04/画像、~5秒
- *   - imagen-3.0-fast-generate-001: $0.02/画像、~3秒
  */
 
 import { GoogleAuth, type JWTInput } from 'google-auth-library';
@@ -87,7 +88,7 @@ function getVertexConfig(): VertexConfig {
   return {
     projectId,
     location: (process.env.VERTEX_LOCATION || 'us-central1').trim(),
-    model: (process.env.VERTEX_IMAGE_MODEL || 'gemini-3.1-flash-image').trim(),
+    model: (process.env.VERTEX_IMAGE_MODEL || 'imagen-3.0-fast-generate-001').trim(),
   };
 }
 
