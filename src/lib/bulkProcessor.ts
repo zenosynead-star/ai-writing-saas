@@ -21,7 +21,6 @@ import { internalPost } from './internalFetch';
 //   画像/公開の二重課金・WP重複投稿を招くため不可）。
 const STALL_MS = 35 * 60 * 1000;
 const MAX_ATTEMPTS = 3; // これ以上失敗したら failed 確定
-const DEFAULT_CONCURRENCY = 2; // watchdog 起動時の既定同時数（画像は IMAGE_MAX_CONCURRENCY で別途直列化）
 
 interface BulkParams {
   model: 'low_cost' | 'balanced' | 'high_quality';
@@ -30,6 +29,7 @@ interface BulkParams {
   effImageMode: 'none' | 'eyecatch' | 'full';
   wpPublish: 'none' | 'draft' | 'publish';
   targetChars: number;
+  /** 後方互換で保持するだけ（未使用）。処理は常に1件ずつ直列。worker を多重化してはいけない。 */
   parallelism: number;
 }
 
@@ -53,11 +53,10 @@ export async function runBulkProcessor(jobId?: string): Promise<{ started: boole
     // よって 'processing' のまま残っている記事は前回ループがプロセス再起動等で死んだ「孤児」。
     // pending に戻し即再開できるようにする（35分の stall 待ちを回避＝再起動後すぐ自動再開）。
     await resetOrphans(jobId);
-    const concurrency = await resolveConcurrency(jobId);
-    // worker プール: 各 worker は claim → 処理 を、claim できなくなるまで繰り返す。
-    const workers = Array.from({ length: concurrency }, () => worker(jobId));
-    const counts = await Promise.all(workers);
-    processed = counts.reduce((a, b) => a + b, 0);
+    // 「上から順に1件ずつ」処理する＝同時実行は常に1（createdAt 昇順 claim）。
+    // 画像は IMAGE_MAX_CONCURRENCY で別途直列化されており、記事も直列にすることで
+    //  ① 一覧の上から順に進む（ユーザー要望） ② Vertex への同時アクセスが減り 429 が減る。
+    processed = await worker(jobId);
     await finalizeJobs(jobId);
   } finally {
     processing = false;
@@ -78,21 +77,6 @@ async function resetOrphans(jobId?: string): Promise<void> {
       data: { bulkState: 'pending', bulkClaimedAt: null, bulkStage: '' },
     })
     .catch(() => {});
-}
-
-async function resolveConcurrency(jobId?: string): Promise<number> {
-  if (jobId) {
-    const job = await prisma.bulkJob.findUnique({ where: { id: jobId }, select: { params: true } });
-    if (job) {
-      try {
-        const p = JSON.parse(job.params) as BulkParams;
-        return Math.max(1, Math.min(p.parallelism || DEFAULT_CONCURRENCY, 4));
-      } catch {
-        /* fallthrough */
-      }
-    }
-  }
-  return DEFAULT_CONCURRENCY;
 }
 
 async function worker(jobId?: string): Promise<number> {
@@ -196,21 +180,34 @@ async function processArticle(aid: string): Promise<void> {
       return;
     }
 
-    // 2. 画像（本文は完成済みなので画像が失敗しても続行＋注記）
+    // 2. 画像（本文は完成済みなので画像が失敗しても続行＋注記）。
+    //    デプロイ等の再起動で internal 接続が切れると、画像は実際に保存できているのに
+    //    internalPost が ok=false を返し「生成に失敗」と誤表示される。これを避けるため、
+    //    呼び出し後に DB の保存済み画像(eyecatch)を確認し、無ければ再試行する。
+    //    generateImage は必ず1枚返す設計なので、ルートが完走していれば eyecatch は必ず存在する。
     let note: string | undefined;
     if (p.effImageMode !== 'none') {
       await setStage(aid, '画像');
-      const img = await internalPost<{ error?: string; generated?: unknown[]; errors?: Array<{ error?: string }> }>(
-        '/api/generate/images',
-        { articleId: aid, scope: p.effImageMode === 'full' ? 'all' : 'eyecatch' },
-      );
-      if (!img.ok) {
-        note = `画像: ${img.data?.error || '生成に失敗しました'}`;
-      } else if (img.data?.errors && img.data.errors.length > 0) {
-        const gen = img.data.generated?.length ?? 0;
-        const first = img.data.errors[0]?.error;
-        note = gen === 0 ? `画像: 生成失敗（${first || '不明なエラー'}）` : `画像: ${img.data.errors.length}枚失敗`;
+      const scope = p.effImageMode === 'full' ? 'all' : 'eyecatch';
+      let haveImage = false;
+      let partialNote: string | undefined;
+      for (let attempt = 0; attempt < 3 && !haveImage; attempt++) {
+        if (attempt > 0) await new Promise((r) => setTimeout(r, 4000));
+        const img = await internalPost<{ error?: string; generated?: unknown[]; errors?: Array<{ error?: string }> }>(
+          '/api/generate/images',
+          { articleId: aid, scope },
+        );
+        const eye = await prisma.articleImage.count({ where: { articleId: aid, kind: 'eyecatch' } });
+        if (eye > 0) {
+          haveImage = true; // 画像は揃っている（接続切れで ok=false でも誤「失敗」にしない）
+          // h2 の一部が取れなかった分だけ注記（後で backfill タイマーが本物へ補完）。
+          if (img.ok && img.data?.errors && img.data.errors.length > 0) {
+            partialNote = `画像: ${img.data.errors.length}枚は後で自動補完されます`;
+          }
+        }
+        // eyecatch がまだ無い＝ルートが完走していない（再起動等）→ 次の試行へ
       }
+      note = haveImage ? partialNote : '画像: 一時的に取得できませんでした（記事編集から再生成できます）';
     }
 
     // 3. WordPress公開（任意）

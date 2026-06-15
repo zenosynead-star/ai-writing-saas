@@ -24,8 +24,9 @@ const Schema = z.object({
   imageMode: z.enum(['none', 'eyecatch', 'full']).optional().default('none'),
   wpPublish: z.enum(['none', 'draft', 'publish']).optional().default('none'),
   targetChars: z.number().int().min(0).max(50000).optional().default(0),
-  // 同時実行数の実上限はプロセッサ側 resolveConcurrency でも 4 にクランプされる（過負荷防止）。
-  parallelism: z.number().int().min(1).max(4).optional().default(3),
+  // 後方互換のため受理するが現在は未使用。プロセッサは常に「上から順に1件ずつ」処理する
+  //（同時実行は廃止＝Vertex の 429 低減のため記事も画像も直列化）。
+  parallelism: z.number().int().min(1).max(4).optional().default(1),
 });
 
 /**

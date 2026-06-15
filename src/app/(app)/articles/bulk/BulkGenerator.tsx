@@ -89,7 +89,7 @@ export default function BulkGenerator() {
   const [useCompetitor, setUseCompetitor] = useState(true);
   const [useWebSearch, setUseWebSearch] = useState(false);
   const [skipPublished, setSkipPublished] = useState(true);
-  const [parallelism, setParallelism] = useState(3);
+  const parallelism = 1; // サーバーは「上から順に1件ずつ」処理（同時実行は廃止）
   const [imageMode, setImageMode] = useState<ImageMode>('none');
   const [wpPublish, setWpPublish] = useState<WpPublish>('none');
   const [targetChars, setTargetChars] = useState<number>(0);
@@ -359,20 +359,9 @@ export default function BulkGenerator() {
             </div>
           </div>
           <div>
-            <span className="label">同時実行数</span>
-            <div className="flex gap-1.5">
-              {([2, 3, 4] as const).map((n) => (
-                <button
-                  key={n}
-                  onClick={() => setParallelism(n)}
-                  disabled={running}
-                  className={`px-3 py-1.5 rounded-[5px] text-sm font-bold border ${
-                    parallelism === n ? 'bg-teal text-white border-teal' : 'bg-white text-navy border-line hover:bg-bluepaper'
-                  }`}
-                >
-                  {n}
-                </button>
-              ))}
+            <span className="label">処理順</span>
+            <div className="flex items-center h-[34px] px-3 rounded-[5px] border border-line bg-bluepaper text-sm font-bold text-navy">
+              上から順に1件ずつ
             </div>
           </div>
           <div>
@@ -477,17 +466,12 @@ export default function BulkGenerator() {
         )}
         {imageMode !== 'none' && (
           <p className="text-xs text-amber-600">
-            ※ 画像生成ON{imageMode === 'full' ? '（フル=アイキャッチ＋全見出し画像）' : '（アイキャッチ1枚）'}: 各記事に画像処理（数十秒〜数分）が追加され、Imagen の画像課金（約$0.04/枚）が発生する場合があります。画像ON時は同時実行数を低め（2〜3）推奨。
-          </p>
-        )}
-        {parallelism >= 4 && (
-          <p className="text-xs text-amber-600">
-            ※ 同時実行数が多いほど Claude の利用上限・サーバー負荷に当たりやすくなります。失敗が増えたら数を下げてください。
+            ※ 画像生成ON{imageMode === 'full' ? '（フル=アイキャッチ＋全見出し画像）' : '（アイキャッチ1枚）'}: 各記事に画像処理（数十秒〜数分）が追加され、Imagen の画像課金（約$0.04/枚）が発生する場合があります。
           </p>
         )}
         {targetChars >= 30000 && (
           <p className="text-xs text-amber-600">
-            ※ 目標文字数{Math.round(targetChars / 10000)}万字: h2セクション単位で多段増補するため、1記事の生成に10〜20分かかります。同時実行数は低め（2〜3）推奨。
+            ※ 目標文字数{Math.round(targetChars / 10000)}万字: h2セクション単位で多段増補するため、1記事の生成に10〜20分かかります。
           </p>
         )}
         {targetChars === 0 ? (
