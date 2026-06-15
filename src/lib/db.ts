@@ -8,7 +8,7 @@ function isRetryableDbError(msg: string): boolean {
     /57P01/.test(msg) || // terminating connection due to administrator command
     /terminating connection/i.test(msg) ||
     /administrator command/i.test(msg) ||
-    /Closed|connection closed|closed the connection|Server has closed/i.test(msg) ||
+    /\bClosed\b|connection closed|closed the connection|Server has closed/i.test(msg) || // \b で disclosed/enclosed の誤検出を防ぐ（kind: Closed は拾う）
     /Connection reset|ECONNRESET|EPIPE|ETIMEDOUT|socket hang up/i.test(msg) ||
     /Connection refused|Can't reach database server/i.test(msg) ||
     /Timed out fetching a new connection|pool timeout|connection pool/i.test(msg) ||
@@ -41,7 +41,10 @@ function createPrismaClient() {
             return await query(args);
           } catch (e) {
             lastErr = e;
-            const msg = (e as Error)?.message ?? '';
+            // Prisma の接続断は message が空で code/全文側にだけ出ることがある
+            // (例: `Error { kind: Closed }` / P1017)。message・code・name・String(e) を全部見て判定する。
+            const err = e as { message?: string; code?: string; name?: string };
+            const msg = `${err?.message ?? ''} ${err?.code ?? ''} ${err?.name ?? ''} ${String(e)}`;
             if (i < BACKOFF_MS.length && isRetryableDbError(msg)) {
               await new Promise((r) => setTimeout(r, BACKOFF_MS[i]));
               continue;

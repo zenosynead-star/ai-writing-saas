@@ -42,7 +42,8 @@ export async function POST(req: NextRequest) {
     const user = await getCurrentUser();
     const parsed = Schema.safeParse(await req.json().catch(() => ({})));
     if (!parsed.success) return NextResponse.json({ error: 'リクエストが不正です' }, { status: 400 });
-    const { articleId, limit = 30 } = parsed.data;
+    // 既定は控えめ(15)。同時実行中の一括生成と競合して pooler/WP を圧迫しないため。
+    const { articleId, limit = 15 } = parsed.data;
 
     const placeholders = await prisma.articleImage.findMany({
       where: {
@@ -81,6 +82,8 @@ export async function POST(req: NextRequest) {
       } catch (e) {
         console.warn('[images/backfill] 再生成失敗:', (e as Error).message);
       }
+      // pooler/WP を圧迫しないよう各項目の間に小休止（同時実行中の一括生成と競合させない）
+      await new Promise((r) => setTimeout(r, 1500));
     }
 
     // 公開済み記事は WP を更新して本物画像を反映（best-effort：失敗しても DB は差し替え済み）
@@ -91,6 +94,8 @@ export async function POST(req: NextRequest) {
       } catch (e) {
         console.warn('[images/backfill] 再公開失敗:', (e as Error).message);
       }
+      // 各再公開(WP更新)の間にも小休止して WP/pooler 負荷を分散
+      await new Promise((r) => setTimeout(r, 2000));
     }
 
     return NextResponse.json({
