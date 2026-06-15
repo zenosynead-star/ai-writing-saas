@@ -49,6 +49,10 @@ export async function runBulkProcessor(jobId?: string): Promise<{ started: boole
   processing = true;
   let processed = 0;
   try {
+    // ここに来た時点で processing は false→true。＝このプロセスで処理ループは走っていない。
+    // よって 'processing' のまま残っている記事は前回ループがプロセス再起動等で死んだ「孤児」。
+    // pending に戻し即再開できるようにする（35分の stall 待ちを回避＝再起動後すぐ自動再開）。
+    await resetOrphans(jobId);
     const concurrency = await resolveConcurrency(jobId);
     // worker プール: 各 worker は claim → 処理 を、claim できなくなるまで繰り返す。
     const workers = Array.from({ length: concurrency }, () => worker(jobId));
@@ -59,6 +63,21 @@ export async function runBulkProcessor(jobId?: string): Promise<{ started: boole
     processing = false;
   }
   return { started: true, processed };
+}
+
+/**
+ * 孤児( processing のまま残った記事 )を pending に戻す。runBulkProcessor の冒頭でのみ呼ぶ。
+ * その時点で processing フラグは false→true 直後＝処理ループは非稼働なので、'processing' は
+ * すべて前回ループの遺物（再起動/クラッシュで中断）。安全に pending へ戻して再開対象にできる。
+ * 再 claim 時に bulkAttempts が増えるので、再起動を繰り返す記事は最終的に failed で止まる。
+ */
+async function resetOrphans(jobId?: string): Promise<void> {
+  await prisma.article
+    .updateMany({
+      where: { bulkJobId: jobId ? jobId : { not: null }, bulkState: 'processing' },
+      data: { bulkState: 'pending', bulkClaimedAt: null, bulkStage: '' },
+    })
+    .catch(() => {});
 }
 
 async function resolveConcurrency(jobId?: string): Promise<number> {
