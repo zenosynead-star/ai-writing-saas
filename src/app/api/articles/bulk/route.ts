@@ -79,14 +79,17 @@ export async function POST(req: NextRequest) {
       if (kwList.length === 0) continue;
       const sig = kwSignature(kwList);
 
-      // 公開済みの同KW記事があれば生成せずスキップ（このアプリのDB）
+      // アプリDBに同KWの投稿済み記事(wpPostId あり)があっても、それが「今も WP で公開中か」は
+      // 下の WP 本体チェック(status=publish のみ)で判定する。WP接続が無い時だけ DB の記録で
+      // スキップする（フォールバック）。こうすることで、WP でゴミ箱/下書きに移した KW は
+      // 「実際に公開中ではない」ので再生成できる（ユーザー要望: 公開中のものだけスキップ）。
       const hit = publishedSigs.get(sig);
-      if (hit) {
+      if (hit && !wpCreds) {
         skipped.push({ keyword: kwList.join(' '), existingId: hit.id, existingTitle: hit.title || kwList.join(' ') });
         continue;
       }
 
-      // WP 本体に同KWの既存投稿があればスキップ（他ツール/手動公開した記事の重複も防ぐ）
+      // WP 本体に同KWの「公開中」投稿があればスキップ（他ツール/手動公開の重複も防ぐ。これが実体判定）
       if (wpCreds) {
         const wpHit = await findExistingWpPostByKeywords(wpCreds, kwList);
         if (wpHit) {

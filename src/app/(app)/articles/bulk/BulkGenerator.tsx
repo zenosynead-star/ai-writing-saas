@@ -82,7 +82,7 @@ export default function BulkGenerator() {
       setRows(skippedRows);
       setError(
         skippedRows.length > 0
-          ? 'すべて公開済み（WordPress投稿済み）のため、新規生成はありませんでした。'
+          ? 'すべて WordPress で公開中のため、新規生成はありませんでした。'
           : '生成対象がありませんでした。',
       );
       setRunning(false);
@@ -408,7 +408,7 @@ export default function BulkGenerator() {
         )}
         {skipPublished && !running && (
           <p className="text-xs text-sub">
-            ※「公開済みはスキップ」ON: 同じキーワードで既に WordPress へ投稿済みの記事がある行は生成しません。
+            ※「公開済みはスキップ」ON: 同じキーワードで WordPress に<strong>公開中</strong>の記事がある行のみ生成しません（ゴミ箱・下書き・予約・非公開は対象外＝再生成できます）。
           </p>
         )}
       </div>
@@ -430,7 +430,7 @@ export default function BulkGenerator() {
                   {r.title && <div className="text-xs text-sub truncate">KW: {r.keyword}</div>}
                   {r.status === 'skipped' && (
                     <div className="text-xs text-amber-600">
-                      公開済み（WordPress投稿済み）のためスキップ
+                      WordPress で公開中のためスキップ
                       {r.wpLink && (
                         <>
                           {' '}

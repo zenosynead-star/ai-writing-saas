@@ -169,7 +169,11 @@ export async function resolveTagIds(creds: WpCredentials, names: string[]): Prom
 /**
  * WP に「指定キーワードの全トークンをタイトルに含む既存投稿」があれば返す（重複公開の防止用）。
  * 他ツール(wp-rewriter)や手動で公開した記事はこのアプリのDBに無いため、WP 本体を直接検索して判定する。
- * publish / future / draft / private を対象。1件でもタイトルに全トークンを含めば「同KWの記事が既にある」と見なす。
+ * **status=publish（実際に公開中の投稿）のみを対象**にする。
+ *   - ごみ箱(trash)・下書き(draft)・予約(future)・非公開(private) は対象外＝スキップしない。
+ *     → ごみ箱に捨てた/下書きのままの KW は再生成できる（ユーザー要望: 公開中のものだけスキップ）。
+ *   - WP REST は status=trash を明示しない限りゴミ箱を返さないので、publish 指定で trash は自然に除外される。
+ * 1件でもタイトルに全トークンを含めば「同KWの公開記事が既にある」と見なす。
  */
 export async function findExistingWpPostByKeywords(
   creds: WpCredentials,
@@ -187,7 +191,7 @@ export async function findExistingWpPostByKeywords(
     // 重複チェックは一括作成で最大50回直列に走るため、無応答WPで全体を詰まらせないよう短めのタイムアウト
     const resp = await wpRequest(
       creds,
-      `/posts?search=${q}&per_page=20&status=publish,future,draft,private&_fields=id,title,link`,
+      `/posts?search=${q}&per_page=20&status=publish&_fields=id,title,link`,
       {},
       15_000,
     );
