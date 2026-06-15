@@ -423,7 +423,7 @@ export default function BulkGenerator() {
           </h2>
           <ul className="divide-y divide-line">
             {rows.map((r, i) => (
-              <li key={r.articleId ?? i} className="py-3 flex items-center gap-3">
+              <li key={r.articleId || `row-${i}`} className="py-3 flex items-center gap-3">
                 <StatusIcon status={r.status} />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-bold text-navy truncate">{r.title || r.keyword}</div>

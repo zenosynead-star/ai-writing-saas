@@ -18,7 +18,7 @@ const Schema = z.object({
   useCompetitorAnalysis: z.boolean().optional(),
   useWebSearch: z.boolean().optional(),
   model: z.enum(['low_cost', 'balanced', 'high_quality']).optional(),
-  /** 手動の目標文字数（指定時は競合分析より優先。[3500,50000] にクランプ）。 */
+  /** 手動の目標文字数（指定時は競合分析より優先。clampTargetChars で [3500,60000] にクランプ）。 */
   targetCharsOverride: z.number().int().positive().max(60000).optional(),
 });
 
@@ -115,6 +115,8 @@ function skeletonBody(tree: HeadingNode[], title: string): string {
 }
 
 export async function POST(req: NextRequest) {
+  // 'generating' に遷移済みの記事を、想定外の例外で「処理中」固着させないための後始末用。
+  let articleIdForCleanup: string | null = null;
   try {
     const user = await getCurrentUser();
     const parsed = Schema.safeParse(await req.json());
@@ -127,6 +129,7 @@ export async function POST(req: NextRequest) {
     const keywords = JSON.parse(article.keywords || '[]') as string[];
     if (keywords.length === 0) return NextResponse.json({ error: 'キーワード未設定' }, { status: 400 });
 
+    articleIdForCleanup = articleId; // 以降で例外が出たら catch 側で failed に矯正する
     await prisma.article.update({ where: { id: articleId }, data: { status: 'generating' } });
 
     // 「時間がかかってもエラーを出さず最後まで処理」方針:
@@ -297,10 +300,25 @@ export async function POST(req: NextRequest) {
     const degraded = exp.finalChars < MIN_BODY_CHARS;
     const finalStatus = degraded ? 'failed' : 'completed';
 
-    await prisma.article.update({
-      where: { id: articleId },
-      data: { bodyHtml: html, metaDescription: meta, modelUsed, status: finalStatus, step: 5, featuredProductId },
-    });
+    // 最終 update が接続断等で落ちても、記事を 'generating' のまま残さない
+    // （db.ts のリトライを抜けた稀なケース）。失敗時は本文だけでも保存を試み、
+    // それも無理なら status だけ 'failed' に落として「処理中」固着を防ぐ。
+    try {
+      await prisma.article.update({
+        where: { id: articleId },
+        data: { bodyHtml: html, metaDescription: meta, modelUsed, status: finalStatus, step: 5, featuredProductId },
+      });
+    } catch (e) {
+      console.warn('[auto] 最終 update 失敗 → status を failed に矯正:', (e as Error).message);
+      await prisma.article
+        .update({ where: { id: articleId }, data: { status: 'failed' } })
+        .catch(() => {});
+      // degraded:true を立てて、一括フロー側で画像課金・公開をスキップさせる（保存できていないため）。
+      return NextResponse.json(
+        { ok: false, articleId, title, status: 'failed', degraded: true, bodyChars: exp.finalChars, error: '生成は完了しましたが保存に失敗しました' },
+        { status: 200 },
+      );
+    }
 
     return NextResponse.json({
       ok: true, articleId, title,
@@ -315,6 +333,10 @@ export async function POST(req: NextRequest) {
     });
   } catch (err) {
     console.error('[auto]', err);
+    // 'generating' に遷移済みなら、想定外の例外でも記事を「処理中」のまま残さず failed に矯正（best-effort）。
+    if (articleIdForCleanup) {
+      await prisma.article.update({ where: { id: articleIdForCleanup }, data: { status: 'failed' } }).catch(() => {});
+    }
     const { status, body } = llmErrorToResponse(err);
     return NextResponse.json(body, { status });
   }
