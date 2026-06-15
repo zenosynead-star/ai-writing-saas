@@ -158,6 +158,15 @@ model Article {
   featuredProductId String? // おすすめ商品ルールで選定した推奨商品 (products.json product_id)。本文/カードで使用
   wpPostId     Int?     // WordPressに投稿後のPost ID
   wpPostStatus String?  // draft / publish / future
+  // 一括生成ジョブ（サーバー側キュー。画面更新で消えない＋停止/ストール時に自動再開）
+  bulkJobId     String?   // BulkJob.id（このバルク実行に所属する生成対象記事）
+  bulkState     String?   // pending / processing / done / failed / stopped（非バルクは null）
+  bulkStage     String?   // 表示用の現在ステージ: '' / 本文 / 画像 / 公開
+  bulkAttempts  Int       @default(0) // 試行回数（上限超で failed）
+  bulkClaimedAt DateTime? // 処理開始時刻（古いままなら stall とみなし再実行）
+  bulkNote      String?   // 表示用の注記/エラー（画像失敗・簡易内容など）
+  bulkPub       String?   // WordPress公開結果ラベル（公開済み/下書き保存/薬機法保留/公開失敗…）
+  bulkWpLink    String?   // 公開後の記事URL（表示用）
   totalCreditsUsed Int  @default(0)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -165,6 +174,24 @@ model Article {
   articleImages ArticleImage[]
 
   @@index([userId, createdAt])
+  @@index([bulkJobId])
+  @@index([bulkState, bulkClaimedAt])
+}
+
+/// 一括生成ジョブ（サーバー側キュー）。クライアントは jobId で進捗をポーリングするので
+/// 画面を更新/離脱しても状態が残る。停止フラグ＋ストール/失敗記事の自動再実行(watchdog timer)に使う。
+model BulkJob {
+  id        String   @id @default(cuid())
+  userId    String
+  status    String   @default("running") // running / done / stopped
+  params    String   // JSON: model/useCompetitor/useWebSearch/effImageMode/wpPublish/targetChars/parallelism
+  total     Int      @default(0)          // 生成対象記事数（skipped を除く）
+  skipped   String?  // JSON: スキップ行（公開中KW）。画面再描画用に保持
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([status])
 }
 
 model ArticleHeading {

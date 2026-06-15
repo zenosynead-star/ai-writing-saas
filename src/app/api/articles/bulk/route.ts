@@ -3,18 +3,29 @@ import { getCurrentUser } from '@/lib/auth';
 import { prisma } from '@/lib/db';
 import { sanitizeUserInput } from '@/lib/llm';
 import { findExistingWpPostByKeywords, type WpCredentials } from '@/lib/wordpress';
+import { internalPost } from '@/lib/internalFetch';
 import { z } from 'zod';
 
 /**
- * 一括記事作成: キーワード(行)ごとに draft 記事を作成して返す。
- * 実生成はクライアントが /api/generate/auto を記事ごとに順次呼ぶ。
+ * 一括記事作成 + サーバー側ジョブ起動。
+ * キーワード(行)ごとに draft 記事を作成し BulkJob にぶら下げ、サーバー側プロセッサを起動して返す。
+ * 実生成(本文→画像→公開)はサーバーが駆動するので、画面を更新/離脱しても継続し、
+ * 止まっても watchdog timer が再開する。クライアントは jobId で進捗をポーリングするだけ。
  *
- * skipPublished=true (既定) のとき、同一キーワードで既に WordPress へ投稿済み
- * (wpPostId あり) の記事が存在する行は draft を作らずスキップし、skipped で返す。
+ * skipPublished=true (既定) のとき、同一キーワードで WordPress に「公開中(status=publish)」の
+ * 記事が存在する行は作成せずスキップし、skipped で返す（ゴミ箱/下書きは対象外＝再生成する）。
  */
 const Schema = z.object({
   keywords: z.array(z.string().min(1).max(200)).min(1).max(50),
   skipPublished: z.boolean().optional().default(true),
+  model: z.enum(['low_cost', 'balanced', 'high_quality']).optional().default('balanced'),
+  useCompetitor: z.boolean().optional().default(true),
+  useWebSearch: z.boolean().optional().default(false),
+  imageMode: z.enum(['none', 'eyecatch', 'full']).optional().default('none'),
+  wpPublish: z.enum(['none', 'draft', 'publish']).optional().default('none'),
+  targetChars: z.number().int().min(0).max(50000).optional().default(0),
+  // 同時実行数の実上限はプロセッサ側 resolveConcurrency でも 4 にクランプされる（過負荷防止）。
+  parallelism: z.number().int().min(1).max(4).optional().default(3),
 });
 
 /**
@@ -38,7 +49,10 @@ export async function POST(req: NextRequest) {
     const parsed = Schema.safeParse(await req.json());
     if (!parsed.success) return NextResponse.json({ error: 'キーワードを1〜50件で入力してください' }, { status: 400 });
 
-    const { keywords, skipPublished } = parsed.data;
+    const { keywords, skipPublished, model, useCompetitor, useWebSearch, imageMode, wpPublish, targetChars, parallelism } =
+      parsed.data;
+    // 公開時は画像が必須なので、画像「なし」選択でも最低アイキャッチを生成する
+    const effImageMode = wpPublish !== 'none' && imageMode === 'none' ? 'eyecatch' : imageMode;
 
     // 公開済み(WordPress 投稿済み = wpPostId あり)記事の KW シグネチャを集める
     const publishedSigs = new Map<string, { id: string; title: string }>();
@@ -69,7 +83,7 @@ export async function POST(req: NextRequest) {
       if (conn) wpCreds = { siteUrl: conn.siteUrl, username: conn.username, appPassword: conn.appPassword };
     }
 
-    const created: Array<{ id: string; keyword: string }> = [];
+    const toCreate: string[][] = [];
     const skipped: Array<{ keyword: string; existingId: string; existingTitle: string; wpLink?: string }> = [];
     for (const raw of keywords) {
       const kw = sanitizeUserInput(raw).trim();
@@ -103,19 +117,38 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      const article = await prisma.article.create({
-        data: {
-          userId: user.id,
-          title: '',
-          keywords: JSON.stringify(kwList),
-          status: 'draft',
-          step: 1,
-        },
-      });
-      created.push({ id: article.id, keyword: kwList.join(' ') });
+      toCreate.push(kwList);
     }
 
-    return NextResponse.json({ created, skipped });
+    if (toCreate.length === 0) {
+      // 生成対象なし（全部公開中スキップ等）。ジョブは作らず skipped だけ返す。
+      return NextResponse.json({ jobId: null, created: 0, skipped });
+    }
+
+    // サーバー側ジョブを作成（設定を保存）→ 記事を pending で一括作成 → プロセッサ起動。
+    // 以降の本文→画像→公開はサーバーが駆動するので、画面更新/離脱しても継続する。
+    const params = JSON.stringify({ model, useCompetitor, useWebSearch, effImageMode, wpPublish, targetChars, parallelism });
+    const job = await prisma.bulkJob.create({
+      data: { userId: user.id, status: 'running', params, total: toCreate.length, skipped: JSON.stringify(skipped) },
+    });
+    await prisma.article.createMany({
+      data: toCreate.map((kwList) => ({
+        userId: user.id,
+        title: '',
+        keywords: JSON.stringify(kwList),
+        status: 'draft',
+        step: 1,
+        bulkJobId: job.id,
+        bulkState: 'pending',
+        bulkAttempts: 0,
+      })),
+    });
+
+    // サーバー側プロセッサを起動（/process は即応答し、処理はバックグラウンドで継続）。
+    // 失敗しても watchdog timer が pending を拾うので握り潰してよい。
+    await internalPost('/api/articles/bulk/process', { jobId: job.id }).catch(() => {});
+
+    return NextResponse.json({ jobId: job.id, created: toCreate.length, skipped });
   } catch (err) {
     console.error('[articles/bulk]', err);
     return NextResponse.json({ error: 'サーバー内部エラー' }, { status: 500 });
