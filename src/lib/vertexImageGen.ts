@@ -244,8 +244,20 @@ async function generateGeminiImage(
   throw new VertexImageError(502, 'Gemini Image レスポンスに inline_data が無い');
 }
 
-export async function generateVertexImage(opts: VertexImageOptions): Promise<VertexImageResult> {
-  const cfg = getVertexConfig();
+/**
+ * @param cfgOverride モデル/ロケーションを差し替えて呼ぶ（主モデル=Nano Banana Pro@global が
+ *   429 等で落ちた時に、別枠クォータの無印モデル@us-central1 へフォールバックする用途）。
+ */
+export async function generateVertexImage(
+  opts: VertexImageOptions,
+  cfgOverride?: { model?: string; location?: string },
+): Promise<VertexImageResult> {
+  const base = getVertexConfig();
+  const cfg: VertexConfig = {
+    ...base,
+    ...(cfgOverride?.model ? { model: cfgOverride.model.trim() } : {}),
+    ...(cfgOverride?.location ? { location: cfgOverride.location.trim() } : {}),
+  };
   const mode = detectModelMode(cfg.model);
   if (mode === 'imagen') {
     return generateImagenViaPredict(cfg, opts);

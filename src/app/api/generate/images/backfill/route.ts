@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth';
 import { prisma } from '@/lib/db';
 import { generateImage } from '@/lib/imageGen';
+import { embedH2Images, countH2 } from '@/lib/imageEmbed';
 import { z } from 'zod';
 
 /**
@@ -23,6 +24,29 @@ const Schema = z.object({
 function internalBase(): string {
   if (process.env.INTERNAL_BASE_URL) return process.env.INTERNAL_BASE_URL.replace(/\/$/, '');
   return `http://127.0.0.1:${process.env.PORT || '8008'}`;
+}
+
+/**
+ * SaaSアプリ内プレビュー用の本文(bodyHtml の /api/images figure)を、現在の「本物」h2画像で
+ * 入れ直す。embedH2Images は既存 figure を一旦全削除してから本物のみ挿入するので、
+ * backfill で placeholder→本物 になった画像がアプリ内表示にも反映される（best-effort）。
+ */
+async function reembedBody(articleId: string): Promise<void> {
+  const article = await prisma.article.findUnique({
+    where: { id: articleId },
+    select: { bodyHtml: true },
+  });
+  if (!article?.bodyHtml || countH2(article.bodyHtml) === 0) return;
+  const h2imgs = await prisma.articleImage.findMany({
+    where: { articleId, kind: 'h2', isPlaceholder: false },
+    orderBy: { h2Index: 'asc' },
+    select: { id: true, h2Index: true },
+  });
+  const refs = h2imgs.map((i) => ({ id: i.id, h2Index: i.h2Index ?? 0 }));
+  const newBody = embedH2Images(article.bodyHtml, refs);
+  if (newBody !== article.bodyHtml) {
+    await prisma.article.update({ where: { id: articleId }, data: { bodyHtml: newBody } });
+  }
 }
 
 /** 公開済み記事の WP 投稿を更新し、差し替えた本物画像を反映する（best-effort・現状ステータス維持）。 */
@@ -58,6 +82,7 @@ export async function POST(req: NextRequest) {
 
     let upgraded = 0;
     const toRepublish = new Map<string, { status: string | null }>();
+    const upgradedArticles = new Set<string>();
     for (const ph of placeholders) {
       try {
         const img = await generateImage({
@@ -77,6 +102,7 @@ export async function POST(req: NextRequest) {
             },
           });
           upgraded++;
+          upgradedArticles.add(ph.article.id);
           if (ph.article.wpPostId) toRepublish.set(ph.article.id, { status: ph.article.wpPostStatus });
         }
       } catch (e) {
@@ -84,6 +110,15 @@ export async function POST(req: NextRequest) {
       }
       // pooler/WP を圧迫しないよう各項目の間に小休止（同時実行中の一括生成と競合させない）
       await new Promise((r) => setTimeout(r, 1500));
+    }
+
+    // 本物化した記事はアプリ内プレビュー本文も入れ直す（WP は下の republish で反映）
+    for (const aid of upgradedArticles) {
+      try {
+        await reembedBody(aid);
+      } catch (e) {
+        console.warn('[images/backfill] 本文再挿入失敗:', (e as Error).message);
+      }
     }
 
     // 公開済み記事は WP を更新して本物画像を反映（best-effort：失敗しても DB は差し替え済み）

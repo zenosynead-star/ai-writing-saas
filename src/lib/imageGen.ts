@@ -144,12 +144,15 @@ async function generateWithGemini(opts: GenerateImageOptions): Promise<GenerateI
   throw new ImageGenError(502, '画像データなし');
 }
 
-/** Vertex(Imagen) を最大5回リトライ。終端失敗は throw（呼び出し側がフォールバック）。 */
-async function generateVertexWithRetry(opts: GenerateImageOptions): Promise<GenerateImageResult> {
-  const maxAttempts = 5;
+/** Vertex を最大 maxAttempts 回リトライ。終端失敗は throw（呼び出し側がフォールバック）。 */
+async function generateVertexWithRetry(
+  opts: GenerateImageOptions,
+  cfgOverride?: { model?: string; location?: string },
+  maxAttempts = 5,
+): Promise<GenerateImageResult> {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
-      return await generateVertexImage({ prompt: opts.prompt, aspectRatio: opts.aspectRatio });
+      return await generateVertexImage({ prompt: opts.prompt, aspectRatio: opts.aspectRatio }, cfgOverride);
     } catch (e) {
       const ve = e instanceof VertexImageError ? e : null;
       // 設定不備(SA/プロジェクト/トークン)はリトライしても無駄 → 即終端
@@ -165,6 +168,42 @@ async function generateVertexWithRetry(opts: GenerateImageOptions): Promise<Gene
     }
   }
   throw new ImageGenError(500, 'Vertex: 予期せぬループ終了');
+}
+
+/**
+ * Vertex 主モデル(本番=Nano Banana Pro `gemini-3-pro-image-preview`@global、プレビュー枠で
+ * クォータが厳しい)が 429 等で落ちた時の二次フォールバック設定。別枠クォータの
+ * 無印 Nano Banana `gemini-2.5-flash-image`@us-central1 を返す。Pollinations へ落ちる前に
+ * 「本物のAI画像」を取りに行くことで、一括生成時の手抜きプレースホルダー発生を減らす。
+ * 主モデルと同一(モデル・ロケーション両方)なら null（二重実行しない）。env で調整/無効化可。
+ */
+function vertexFallbackCfg(): { model: string; location: string } | null {
+  const model = (process.env.VERTEX_IMAGE_MODEL_FALLBACK ?? 'gemini-2.5-flash-image').trim();
+  if (!model) return null; // 空文字を明示設定すればフォールバック無効
+  const location = (process.env.VERTEX_LOCATION_FALLBACK || 'us-central1').trim();
+  const primaryModel = (process.env.VERTEX_IMAGE_MODEL || 'gemini-2.5-flash-image').trim();
+  const primaryLoc = (process.env.VERTEX_LOCATION || 'us-central1').trim();
+  if (model === primaryModel && location === primaryLoc) return null;
+  return { model, location };
+}
+
+/**
+ * Vertex 主モデル → 無印フォールバックの順に試す。両方失敗で throw（呼び出し側が Pollinations へ）。
+ * 主は最大5回リトライ、フォールバックは速さ優先で2回まで。
+ */
+async function generateVertexChain(opts: GenerateImageOptions): Promise<GenerateImageResult> {
+  try {
+    return await generateVertexWithRetry(opts); // 主: Nano Banana Pro(global)
+  } catch (e) {
+    // 設定不備(SA/プロジェクト/トークン未設定)は env 全体の問題で、無印モデルも同じ
+    // VERTEX_PROJECT_ID 等を見るため必ず失敗する → 無駄打ちせず即 Pollinations へ。
+    const isConfig =
+      e instanceof VertexImageError && /SERVICE_ACCOUNT|PROJECT_ID|access token|未設定/i.test(e.message);
+    const fb = isConfig ? null : vertexFallbackCfg();
+    if (!fb) throw e;
+    console.warn(`[imageGen] Vertex主モデル失敗 → 無印Vertex(${fb.model}@${fb.location})フォールバック:`, errMsg(e));
+    return await generateVertexWithRetry(opts, fb, 2); // 別枠クォータの無印モデルで本物画像を取りに行く
+  }
 }
 
 function errMsg(e: unknown): string {
@@ -239,18 +278,18 @@ async function generateImageInner(opts: GenerateImageOptions): Promise<GenerateI
         console.warn('[imageGen] AI Studio Imagen 失敗 → Vertex フォールバック:', errMsg(e));
       }
       try {
-        return await generateVertexWithRetry(opts);
+        return await generateVertexChain(opts);
       } catch (e) {
-        console.warn('[imageGen] Vertex 失敗 → Pollinations フォールバック:', errMsg(e));
+        console.warn('[imageGen] Vertex(主+無印) 失敗 → Pollinations フォールバック:', errMsg(e));
       }
       return await generateWithPollinations(opts);
     }
 
     // provider === 'vertex'
     try {
-      return await generateVertexWithRetry(opts);
+      return await generateVertexChain(opts);
     } catch (e) {
-      console.warn('[imageGen] Vertex 失敗 → Pollinations フォールバック:', errMsg(e));
+      console.warn('[imageGen] Vertex(主+無印) 失敗 → Pollinations フォールバック:', errMsg(e));
     }
     return await generateWithPollinations(opts);
   } catch (e) {

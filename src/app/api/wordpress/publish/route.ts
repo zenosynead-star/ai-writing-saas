@@ -142,8 +142,10 @@ export async function POST(req: NextRequest) {
       // 一度全部削除してから WP のメディアURLで挿入し直す
       bodyHtml = stripExistingH2Images(bodyHtml);
 
+      // placeholder(手抜き画像)は WP に出さない。本物の h2 画像のみアップロード&挿入する
+      // （backfill が本物化したら、次回公開でこの経路に乗って挿入される）。
       const h2Imgs = article.articleImages
-        .filter((i) => i.kind === 'h2' && typeof i.h2Index === 'number')
+        .filter((i) => i.kind === 'h2' && typeof i.h2Index === 'number' && !i.isPlaceholder)
         .sort((a, b) => (a.h2Index ?? 0) - (b.h2Index ?? 0));
       if (h2Imgs.length > 0) {
         // h2 ごとに事前にメディアアップロード(直列、Pollinations 同様WPサーバの並列負荷も考慮)
@@ -158,22 +160,26 @@ export async function POST(req: NextRequest) {
           if (!b64) {
             try {
               const re = await generateImage({ prompt: img.prompt, aspectRatio: '16:9', overlayTitle: altText });
-              b64 = re.base64;
-              mime = re.mimeType;
-              // 再生成でも本物が取れず placeholder 止まりなら isPlaceholder を立て直す。
+              // 再生成でも本物が取れず placeholder 止まりなら、WP には出さず isPlaceholder を立て直す。
               // (公開後に base64 をクリアすると後段の updateMany 後は isPlaceholder=false のまま
-              //  残るため、立て直さないと backfill タイマーが拾えず placeholder が WP に固定される)
+              //  残るため、立て直さないと backfill タイマーが拾えず手抜き画像が WP に固定される)
               const stillPlaceholder = re.modelUsed === 'placeholder' || re.modelUsed === 'placeholder-empty';
-              if (stillPlaceholder && !img.isPlaceholder) {
-                await prisma.articleImage
-                  .update({ where: { id: img.id }, data: { isPlaceholder: true } })
-                  .catch(() => {});
+              if (stillPlaceholder) {
+                if (!img.isPlaceholder) {
+                  await prisma.articleImage
+                    .update({ where: { id: img.id }, data: { isPlaceholder: true } })
+                    .catch(() => {});
+                }
+                // b64 は空のまま → 下の continue でこの h2 はスキップ（backfill が後で本物化）
+              } else {
+                b64 = re.base64;
+                mime = re.mimeType;
               }
             } catch (e) {
               console.warn('[wordpress/publish] h2画像 再生成失敗:', (e as Error).message);
             }
           }
-          if (!b64) continue; // それでも画像が無ければこの h2 はスキップ
+          if (!b64) continue; // 画像が無い / placeholder 止まりならこの h2 はスキップ
           const uploaded = await uploadMedia(creds, {
             filename: `h2-${article.id}-${idx}.${(mime.split('/')[1] || 'jpg').replace('jpeg', 'jpg')}`,
             mimeType: mime,

@@ -175,20 +175,23 @@ export async function POST(req: NextRequest) {
         where: { articleId, kind: 'h2' },
         orderBy: { h2Index: 'asc' },
       });
-      if (allH2Images.length > 0) {
-        const refs = allH2Images.map((i) => ({
+      // placeholder(手抜き画像)は本文に出さない。本物のみ refs 化する。
+      // 空でも embedH2Images を通すことで、過去に挿入済みの placeholder figure を本文から除去する
+      // （backfill が本物化したら、次回この経路で改めて挿入される）。
+      const refs = allH2Images
+        .filter((i) => !i.isPlaceholder)
+        .map((i) => ({
           id: i.id,
           h2Index: i.h2Index ?? 0,
           alt: allH2Texts[i.h2Index ?? 0],
         }));
-        const newBody = embedH2Images(article.bodyHtml, refs);
-        if (newBody !== article.bodyHtml) {
-          await prisma.article.update({
-            where: { id: articleId },
-            data: { bodyHtml: newBody },
-          });
-          embedNote = `${refs.length}枚を本文に挿入`;
-        }
+      const newBody = embedH2Images(article.bodyHtml, refs);
+      if (newBody !== article.bodyHtml) {
+        await prisma.article.update({
+          where: { id: articleId },
+          data: { bodyHtml: newBody },
+        });
+        embedNote = refs.length > 0 ? `${refs.length}枚を本文に挿入` : 'プレースホルダーを本文から除去';
       }
     }
 
