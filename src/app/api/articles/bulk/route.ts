@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth';
 import { prisma } from '@/lib/db';
 import { sanitizeUserInput } from '@/lib/llm';
+import { findExistingWpPostByKeywords, type WpCredentials } from '@/lib/wordpress';
 import { z } from 'zod';
 
 /**
@@ -61,8 +62,15 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // WP サイト本体の既存投稿もチェックするための接続情報（他ツール/手動公開の重複も防ぐ）
+    let wpCreds: WpCredentials | null = null;
+    if (skipPublished) {
+      const conn = await prisma.wpConnection.findFirst({ where: { userId: user.id, isDefault: true } });
+      if (conn) wpCreds = { siteUrl: conn.siteUrl, username: conn.username, appPassword: conn.appPassword };
+    }
+
     const created: Array<{ id: string; keyword: string }> = [];
-    const skipped: Array<{ keyword: string; existingId: string; existingTitle: string }> = [];
+    const skipped: Array<{ keyword: string; existingId: string; existingTitle: string; wpLink?: string }> = [];
     for (const raw of keywords) {
       const kw = sanitizeUserInput(raw).trim();
       if (!kw) continue;
@@ -71,11 +79,25 @@ export async function POST(req: NextRequest) {
       if (kwList.length === 0) continue;
       const sig = kwSignature(kwList);
 
-      // 公開済みの同KW記事があれば生成せずスキップ
+      // 公開済みの同KW記事があれば生成せずスキップ（このアプリのDB）
       const hit = publishedSigs.get(sig);
       if (hit) {
         skipped.push({ keyword: kwList.join(' '), existingId: hit.id, existingTitle: hit.title || kwList.join(' ') });
         continue;
+      }
+
+      // WP 本体に同KWの既存投稿があればスキップ（他ツール/手動公開した記事の重複も防ぐ）
+      if (wpCreds) {
+        const wpHit = await findExistingWpPostByKeywords(wpCreds, kwList);
+        if (wpHit) {
+          skipped.push({
+            keyword: kwList.join(' '),
+            existingId: '',
+            existingTitle: wpHit.title || kwList.join(' '),
+            wpLink: wpHit.link || undefined,
+          });
+          continue;
+        }
       }
 
       const article = await prisma.article.create({

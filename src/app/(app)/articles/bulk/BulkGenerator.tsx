@@ -1,9 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import Link from 'next/link';
 
-type RowStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
+type RowStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped' | 'stopped';
 type ImageMode = 'none' | 'eyecatch' | 'full';
 type WpPublish = 'none' | 'draft' | 'publish';
 interface Row {
@@ -29,6 +29,8 @@ export default function BulkGenerator() {
   const [wpPublish, setWpPublish] = useState<WpPublish>('none');
   const [targetChars, setTargetChars] = useState<number>(0); // 0 = 自動（競合分析ベース）
   const [error, setError] = useState<string | null>(null);
+  const [stopping, setStopping] = useState(false);
+  const stopRef = useRef(false); // 緊急停止フラグ（ワーカーが各記事の前にチェック）
 
   const keywords = input
     .split('\n')
@@ -42,10 +44,12 @@ export default function BulkGenerator() {
       return;
     }
     setRunning(true);
+    setStopping(false);
+    stopRef.current = false;
 
     // 1. 一括で draft 記事作成（skipPublished=true なら公開済みの同KW記事はスキップ）
     let created: Array<{ id: string; keyword: string }> = [];
-    let skipped: Array<{ keyword: string; existingId: string; existingTitle: string }> = [];
+    let skipped: Array<{ keyword: string; existingId: string; existingTitle: string; wpLink?: string }> = [];
     try {
       const res = await fetch('/api/articles/bulk', {
         method: 'POST',
@@ -71,6 +75,7 @@ export default function BulkGenerator() {
       articleId: s.existingId,
       title: s.existingTitle,
       status: 'skipped',
+      wpLink: s.wpLink,
     }));
 
     if (created.length === 0) {
@@ -200,7 +205,8 @@ export default function BulkGenerator() {
     const concurrency = Math.max(1, Math.min(parallelism, created.length));
     let cursor = 0;
     const worker = async () => {
-      while (cursor < created.length) {
+      // 緊急停止が押されたら新しい記事の着手を止める（実行中の記事は完了まで進む）
+      while (cursor < created.length && !stopRef.current) {
         const idx = cursor;
         cursor += 1;
         await genOne(created[idx].id);
@@ -208,6 +214,11 @@ export default function BulkGenerator() {
     };
     await Promise.all(Array.from({ length: concurrency }, () => worker()));
 
+    // 停止で未着手のまま残った行は「停止」表示にする
+    if (stopRef.current) {
+      setRows((prev) => prev.map((r) => (r.status === 'pending' ? { ...r, status: 'stopped' } : r)));
+    }
+    setStopping(false);
     setRunning(false);
   };
 
@@ -341,12 +352,27 @@ export default function BulkGenerator() {
 
         {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded p-3">{error}</div>}
 
-        <button onClick={start} disabled={running || keywords.length === 0} className="btn-primary">
-          {running ? `生成中… (${doneCount}/${genTotal})` : `${keywords.length} 記事を一括生成`}
-        </button>
+        <div className="flex items-center gap-3">
+          <button onClick={start} disabled={running || keywords.length === 0} className="btn-primary">
+            {running ? `生成中… (${doneCount}/${genTotal})` : `${keywords.length} 記事を一括生成`}
+          </button>
+          {running && (
+            <button
+              onClick={() => {
+                stopRef.current = true;
+                setStopping(true);
+              }}
+              disabled={stopping}
+              className="px-4 py-2 rounded-[5px] text-sm font-bold border-2 border-red-500 text-red-600 bg-white hover:bg-red-50 disabled:opacity-60"
+            >
+              {stopping ? '停止中…' : '■ 緊急停止'}
+            </button>
+          )}
+        </div>
         {running && (
           <p className="text-xs text-sub">
             ※ 同時 {parallelism} 件ずつ処理（1記事2〜4分{imageMode !== 'none' || wpPublish !== 'none' ? ' ＋画像/公開で数分追加' : ''}）。完了までこのタブを開いたままにしてください。
+            {stopping && ' ／ 停止リクエスト受付：実行中の記事が終わり次第とまります。'}
           </p>
         )}
         {wpPublish !== 'none' && (
@@ -403,7 +429,17 @@ export default function BulkGenerator() {
                   <div className="text-sm font-bold text-navy truncate">{r.title || r.keyword}</div>
                   {r.title && <div className="text-xs text-sub truncate">KW: {r.keyword}</div>}
                   {r.status === 'skipped' && (
-                    <div className="text-xs text-amber-600">公開済み（WordPress投稿済み）のためスキップ</div>
+                    <div className="text-xs text-amber-600">
+                      公開済み（WordPress投稿済み）のためスキップ
+                      {r.wpLink && (
+                        <>
+                          {' '}
+                          <a href={r.wpLink} target="_blank" rel="noopener noreferrer" className="underline">
+                            記事を見る ↗
+                          </a>
+                        </>
+                      )}
+                    </div>
                   )}
                   {r.pub && (
                     <div
@@ -447,5 +483,6 @@ function StatusIcon({ status }: { status: RowStatus }) {
   if (status === 'running') return <span className="w-6 h-6 rounded-full border-2 border-teal border-t-transparent animate-spin shrink-0" />;
   if (status === 'failed') return <span className="step-dot w-6 h-6 text-[10px] bg-red-100 text-red-600">!</span>;
   if (status === 'skipped') return <span className="step-dot w-6 h-6 text-[10px] bg-amber-100 text-amber-700">⏭</span>;
+  if (status === 'stopped') return <span className="step-dot w-6 h-6 text-[10px] bg-gray-200 text-gray-600">■</span>;
   return <span className="step-dot step-dot-todo w-6 h-6 text-[10px]">·</span>;
 }

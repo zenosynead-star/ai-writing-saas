@@ -30,10 +30,11 @@ async function wpRequest(
   creds: WpCredentials,
   path: string,
   init: RequestInit = {},
+  timeoutMs = 60_000,
 ): Promise<Response> {
   const url = `${creds.siteUrl.replace(/\/$/, '')}/wp-json/wp/v2${path}`;
   const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), 60_000);
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
   try {
     const resp = await fetch(url, {
       ...init,
@@ -130,7 +131,8 @@ export async function listCategories(creds: WpCredentials): Promise<WpTerm[]> {
 export async function resolveTagIds(creds: WpCredentials, names: string[]): Promise<number[]> {
   const ids: number[] = [];
   for (const raw of names) {
-    const name = raw.trim();
+    // タグ名は半角スペースに正規化（読点「、」「，」や全角スペースを半角スペースへ、連続空白は1つに）
+    const name = (raw || '').replace(/[、，]/g, ' ').replace(/　/g, ' ').replace(/\s+/g, ' ').trim();
     if (!name) continue;
     try {
       // 完全一致を検索
@@ -162,6 +164,45 @@ export async function resolveTagIds(creds: WpCredentials, names: string[]): Prom
     }
   }
   return [...new Set(ids)];
+}
+
+/**
+ * WP に「指定キーワードの全トークンをタイトルに含む既存投稿」があれば返す（重複公開の防止用）。
+ * 他ツール(wp-rewriter)や手動で公開した記事はこのアプリのDBに無いため、WP 本体を直接検索して判定する。
+ * publish / future / draft / private を対象。1件でもタイトルに全トークンを含めば「同KWの記事が既にある」と見なす。
+ */
+export async function findExistingWpPostByKeywords(
+  creds: WpCredentials,
+  tokens: string[],
+): Promise<{ id: number; title: string; link: string } | null> {
+  const clean = tokens.map((t) => t.trim().toLowerCase()).filter(Boolean);
+  if (clean.length === 0) return null;
+  // 短すぎるトークン(1文字や英字略語)は無関係なタイトルに部分一致して誤スキップを招くため、
+  // タイトル包含の判定からは除外する(検索クエリには全トークンを使う)。
+  // ただし全トークンが短い場合(例:KWが「机」1語)は、全トークンで判定して取りこぼしを防ぐ。
+  const meaningful = clean.filter((t) => t.length >= 2);
+  const matchTokens = meaningful.length > 0 ? meaningful : clean;
+  try {
+    const q = encodeURIComponent(clean.join(' '));
+    // 重複チェックは一括作成で最大50回直列に走るため、無応答WPで全体を詰まらせないよう短めのタイムアウト
+    const resp = await wpRequest(
+      creds,
+      `/posts?search=${q}&per_page=20&status=publish,future,draft,private&_fields=id,title,link`,
+      {},
+      15_000,
+    );
+    if (!resp.ok) return null;
+    const posts = (await resp.json()) as Array<{ id: number; title?: { rendered?: string }; link?: string }>;
+    for (const post of posts) {
+      const title = (post.title?.rendered || '').toLowerCase();
+      if (matchTokens.every((t) => title.includes(t))) {
+        return { id: post.id, title: post.title?.rendered || '', link: post.link || '' };
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 export interface CreatePostInput {

@@ -171,11 +171,13 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ===== タグ自動: 記事のターゲットKWをWPタグに =====
+    // ===== タグ自動: 記事のターゲットKW全体を「半角スペース連結の1タグ」にしてWPタグに =====
+    // 例: ["ゲーミングチェア","買取"] → 1タグ「ゲーミングチェア 買取」。
+    // 読点や全角スペースの半角スペース化は resolveTagIds 側で行う（空要素は内部でスキップ）。
     const keywords = JSON.parse(article.keywords || '[]') as string[];
     let tagIds: number[] = [];
     if (keywords.length > 0) {
-      tagIds = await resolveTagIds(creds, keywords).catch(() => []);
+      tagIds = await resolveTagIds(creds, [keywords.join(' ')]).catch(() => []);
     }
 
     // ===== カテゴリ自動: 既存カテゴリからLLMが最適なものを選定 =====
