@@ -3,10 +3,9 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
-import * as THREE from 'three';
 
-// react-force-graph-3d は three.js / WebGL 依存で SSR 不可。クライアントのみで読み込む。
-const ForceGraph3D = dynamic(() => import('react-force-graph-3d'), { ssr: false });
+// react-force-graph-2d は canvas 描画(WebGL不要)。SSR 不可なのでクライアントのみ。
+const ForceGraph2D = dynamic(() => import('react-force-graph-2d'), { ssr: false });
 
 interface GNode {
   id: string;
@@ -15,16 +14,20 @@ interface GNode {
   status: string;
   outDegree: number;
   inDegree: number;
+  x?: number;
+  y?: number;
 }
 interface GLink {
-  source: string;
-  target: string;
+  source: string | { id: string };
+  target: string | { id: string };
 }
 interface GraphData {
   nodes: GNode[];
-  links: GLink[];
+  links: { source: string; target: string }[];
   stats: { articles: number; links: number; orphans: number };
 }
+
+const idOf = (v: string | { id: string }) => (typeof v === 'object' ? v.id : v);
 
 export default function LinkGraph() {
   const [data, setData] = useState<GraphData | null>(null);
@@ -46,7 +49,7 @@ export default function LinkGraph() {
   useEffect(() => {
     const update = () => {
       if (wrapRef.current) {
-        setSize({ w: wrapRef.current.clientWidth, h: Math.max(480, window.innerHeight - 320) });
+        setSize({ w: wrapRef.current.clientWidth, h: Math.max(420, window.innerHeight - 360) });
       }
     };
     update();
@@ -54,13 +57,13 @@ export default function LinkGraph() {
     return () => window.removeEventListener('resize', update);
   }, [data]);
 
-  // react-force-graph はオブジェクトを mutate するためコピーして渡す（data.links は元のまま保つ）
+  // react-force-graph は渡した links を mutate するためコピーを渡す（元 data.links は string id のまま保つ）
   const graphData = useMemo(
     () => (data ? { nodes: data.nodes.map((n) => ({ ...n })), links: data.links.map((l) => ({ ...l })) } : { nodes: [], links: [] }),
     [data],
   );
 
-  // KW→KW のリンク関係を集計（data.links は string id のまま＝force-graph の mutate を受けない）
+  // KW→KW のリンク関係を集計（data.links は string id のまま＝mutate を受けない）
   const { outMap, inMap, linkList, orphans } = useMemo(() => {
     const byId = new Map<string, GNode>((data?.nodes || []).map((n) => [n.id, n]));
     const outMap = new Map<string, GNode[]>();
@@ -82,19 +85,28 @@ export default function LinkGraph() {
     return { outMap, inMap, linkList, orphans };
   }, [data]);
 
-  const colorFor = (n: GNode) => {
-    if (n.inDegree >= 3) return '#f6b73c'; // 被リンク多 = ハブ(マネーページ等)を強調
-    if (n.status === 'failed') return '#dd2a2a';
-    return '#20c3ac'; // 公開記事(ティール)
-  };
+  // 選択中ノードの「関連ノード集合」（自分＋飛び先＋飛んでくる元）。これ以外は薄く描く。
+  const neighborIds = useMemo(() => {
+    if (!selected) return null;
+    const s = new Set<string>([selected.id]);
+    (outMap.get(selected.id) || []).forEach((n) => s.add(n.id));
+    (inMap.get(selected.id) || []).forEach((n) => s.add(n.id));
+    return s;
+  }, [selected, outMap, inMap]);
+
+  const isHub = (n: GNode) => n.inDegree >= 3;
+  const nodeFill = (n: GNode) => (isHub(n) ? '#f59e0b' : '#16a394'); // ハブ=琥珀 / 通常=ティール
+  const nodeRadius = (n: GNode) => 4 + Math.min(n.inDegree, 8) * 1.4;
+  const linkTouchesSel = (l: GLink) => !!selected && (idOf(l.source) === selected.id || idOf(l.target) === selected.id);
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-navy-deep">内部リンクマップ</h1>
         <p className="text-sm text-sub mt-1">
-          <strong>公開中の記事</strong>をノード、記事間の内部リンクを矢印で表示します。各ノードのラベルはその記事のキーワードです。
-          下の「リンク一覧」で、どのキーワードからどのキーワードへ飛んでいるかを一覧できます。
+          <strong>公開中の記事</strong>をキーワードで表示。線は記事間の内部リンク（矢印＝リンクの向き）。
+          <strong>ノードをクリックすると、そのKWに出入りするリンクだけが強調</strong>され、どこからどこへ飛んでいるかを追えます。
+          下の「リンク一覧」でも一覧できます。
         </p>
       </div>
 
@@ -108,35 +120,81 @@ export default function LinkGraph() {
 
       {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded p-3">{error}</div>}
 
-      <div className="card overflow-hidden relative" ref={wrapRef}>
+      <div className="card overflow-hidden relative bg-[#f7f9fc]" ref={wrapRef}>
         {!data && <div className="p-16 text-center text-sub text-sm">グラフを読み込み中…</div>}
         {data && data.nodes.length === 0 && (
           <div className="p-16 text-center text-sub text-sm">公開中の記事がまだありません。</div>
         )}
         {data && data.nodes.length > 0 && (
-          <ForceGraph3D
-            graphData={graphData}
-            width={size.w}
-            height={size.h}
-            backgroundColor="#0e0d3a"
-            nodeLabel={(n: object) => {
-              const node = n as GNode;
-              return `<div style="background:#fff;color:#171951;padding:6px 10px;border-radius:6px;font-size:12px;max-width:300px;font-weight:700">${escapeHtml(node.keyword)}<br><span style="font-weight:400;color:#717171">${escapeHtml(node.title)}<br>飛ぶ先→${node.outDegree} / 飛んでくる←${node.inDegree}</span></div>`;
-            }}
-            nodeColor={(n: object) => colorFor(n as GNode)}
-            nodeVal={(n: object) => 1 + (n as GNode).inDegree * 2}
-            nodeOpacity={0.95}
-            nodeThreeObjectExtend={true}
-            nodeThreeObject={(n: object) => makeLabelSprite((n as GNode).keyword)}
-            linkColor={() => 'rgba(32,195,172,0.55)'}
-            linkWidth={0.7}
-            linkDirectionalArrowLength={4}
-            linkDirectionalArrowRelPos={1}
-            linkDirectionalParticles={2}
-            linkDirectionalParticleWidth={1.6}
-            linkDirectionalParticleColor={() => '#f6b73c'}
-            onNodeClick={(n: object) => setSelected(n as GNode)}
-          />
+          <>
+            <ForceGraph2D
+              graphData={graphData}
+              width={size.w}
+              height={size.h}
+              backgroundColor="#f7f9fc"
+              cooldownTicks={120}
+              d3VelocityDecay={0.3}
+              nodeRelSize={1}
+              nodeLabel={(n: object) => {
+                const node = n as GNode;
+                return `<div style="background:#171951;color:#fff;padding:5px 9px;border-radius:6px;font-size:12px;max-width:300px;font-weight:700">${escapeHtml(node.keyword)}<br><span style="font-weight:400;opacity:.8">${escapeHtml(node.title)}<br>飛ぶ先→${node.outDegree} / 飛んでくる←${node.inDegree}</span></div>`;
+              }}
+              nodeCanvasObject={(n: object, ctx: CanvasRenderingContext2D, globalScale: number) => {
+                const node = n as GNode;
+                const x = node.x ?? 0;
+                const y = node.y ?? 0;
+                const r = nodeRadius(node);
+                const faded = !!neighborIds && !neighborIds.has(node.id);
+                // ノード円
+                ctx.beginPath();
+                ctx.arc(x, y, r, 0, 2 * Math.PI);
+                ctx.fillStyle = faded ? 'rgba(148,163,184,0.35)' : nodeFill(node);
+                ctx.fill();
+                if (selected?.id === node.id) {
+                  ctx.lineWidth = 2 / globalScale;
+                  ctx.strokeStyle = '#171951';
+                  ctx.stroke();
+                }
+                // KWラベル（白ピル＋濃紺文字。常時表示）
+                const label = node.keyword;
+                const fontSize = Math.max(2.5, 11 / globalScale);
+                ctx.font = `600 ${fontSize}px sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'top';
+                const tw = ctx.measureText(label).width;
+                const px = 3 / globalScale;
+                const py = 1.5 / globalScale;
+                const ly = y + r + 2 / globalScale;
+                if (!faded) {
+                  ctx.fillStyle = 'rgba(255,255,255,0.88)';
+                  ctx.fillRect(x - tw / 2 - px, ly - py, tw + px * 2, fontSize + py * 2);
+                }
+                ctx.fillStyle = faded ? 'rgba(100,116,139,0.45)' : '#171951';
+                ctx.fillText(label, x, ly);
+              }}
+              nodePointerAreaPaint={(n: object, color: string, ctx: CanvasRenderingContext2D) => {
+                const node = n as GNode;
+                ctx.fillStyle = color;
+                ctx.beginPath();
+                ctx.arc(node.x ?? 0, node.y ?? 0, nodeRadius(node) + 3, 0, 2 * Math.PI);
+                ctx.fill();
+              }}
+              linkColor={(l: object) => {
+                const link = l as GLink;
+                if (!selected) return 'rgba(148,163,184,0.4)';
+                return linkTouchesSel(link) ? 'rgba(22,163,148,0.95)' : 'rgba(203,213,225,0.18)';
+              }}
+              linkWidth={(l: object) => (linkTouchesSel(l as GLink) ? 2.5 : 1)}
+              linkDirectionalArrowLength={(l: object) => (linkTouchesSel(l as GLink) ? 4.5 : 2.5)}
+              linkDirectionalArrowRelPos={1}
+              linkDirectionalArrowColor={(l: object) => (linkTouchesSel(l as GLink) ? '#0f766e' : 'rgba(148,163,184,0.5)')}
+              onNodeClick={(n: object) => setSelected((prev) => (prev?.id === (n as GNode).id ? null : (n as GNode)))}
+              onBackgroundClick={() => setSelected(null)}
+            />
+            <div className="absolute top-2 right-3 text-[11px] text-sub bg-white/80 rounded px-2 py-1 pointer-events-none">
+              ドラッグで移動・スクロールで拡大／ノードをクリックで関連リンクを強調・背景クリックで解除
+            </div>
+          </>
         )}
       </div>
 
@@ -179,11 +237,15 @@ export default function LinkGraph() {
             <ul className="divide-y divide-line">
               {linkList.map(({ source, targets }) => (
                 <li key={source.id} className="py-2.5 text-sm leading-relaxed">
-                  <Link href={`/articles/${source.id}`} className="font-bold text-navy hover:underline">
+                  <button
+                    type="button"
+                    onClick={() => setSelected(source)}
+                    className="font-bold text-navy hover:underline text-left"
+                  >
                     {source.keyword}
-                  </Link>
+                  </button>
                   <span className="text-sub mx-1.5">→</span>
-                  <KwLinks nodes={targets} color="teal" />
+                  <KwLinks nodes={targets} color="teal" onPick={setSelected} />
                 </li>
               ))}
             </ul>
@@ -195,7 +257,7 @@ export default function LinkGraph() {
                 どこからもリンクされていない公開記事（{orphans.length}件・内部リンク追加を推奨）
               </div>
               <div className="text-xs">
-                <KwLinks nodes={orphans} color="amber" />
+                <KwLinks nodes={orphans} color="amber" onPick={setSelected} />
               </div>
             </div>
           )}
@@ -203,25 +265,31 @@ export default function LinkGraph() {
       )}
 
       <div className="flex flex-wrap gap-4 text-xs text-sub">
-        <Legend color="#f6b73c" label="被リンク多（ハブ＝SEO上重要）" />
-        <Legend color="#20c3ac" label="公開記事" />
+        <Legend color="#f59e0b" label="被リンク多（ハブ＝SEO上重要）" />
+        <Legend color="#16a394" label="公開記事" />
         <span>● 大きいノード = 被リンクが多い ／ ラベル = 記事のキーワード</span>
       </div>
     </div>
   );
 }
 
-/** KW のリンク列（カンマ区切り）。記事編集ページへのリンク。 */
-function KwLinks({ nodes, color }: { nodes: GNode[]; color: 'teal' | 'navy' | 'amber' }) {
+/** KW のリンク列（読点区切り）。クリックでそのノードを選択（グラフ強調）。 */
+function KwLinks({ nodes, color, onPick }: { nodes: GNode[]; color: 'teal' | 'navy' | 'amber'; onPick?: (n: GNode) => void }) {
   const cls = color === 'navy' ? 'text-navy' : color === 'amber' ? 'text-amber-700' : 'text-teal-mid';
   return (
     <>
       {nodes.map((t, i) => (
         <span key={t.id}>
           {i > 0 && <span className="text-line">、</span>}
-          <Link href={`/articles/${t.id}`} className={`${cls} hover:underline`}>
-            {t.keyword}
-          </Link>
+          {onPick ? (
+            <button type="button" onClick={() => onPick(t)} className={`${cls} hover:underline`}>
+              {t.keyword}
+            </button>
+          ) : (
+            <Link href={`/articles/${t.id}`} className={`${cls} hover:underline`}>
+              {t.keyword}
+            </Link>
+          )}
         </span>
       ))}
     </>
@@ -250,46 +318,4 @@ function Legend({ color, label }: { color: string; label: string }) {
 
 function escapeHtml(s: string) {
   return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] || c));
-}
-
-/**
- * 3Dノードに常時表示するキーワードのテキストラベル（three の CanvasTexture スプライト）。
- * three-spritetext 等の追加依存なしで「記事のKWを可視化」する。nodeThreeObjectExtend=true で
- * 既定の球体に重ねて表示する。
- */
-function makeLabelSprite(text: string): THREE.Sprite {
-  const label = (text || '').length > 18 ? `${text.slice(0, 17)}…` : text || '（無題）';
-  const fontSize = 40;
-  const pad = 12;
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d')!;
-  ctx.font = `700 ${fontSize}px sans-serif`;
-  const textW = ctx.measureText(label).width;
-  canvas.width = Math.ceil(textW + pad * 2);
-  canvas.height = Math.ceil(fontSize + pad * 2);
-  // canvas リサイズで ctx 状態が戻るので再設定
-  ctx.font = `700 ${fontSize}px sans-serif`;
-  ctx.textBaseline = 'middle';
-  const w = canvas.width;
-  const h = canvas.height;
-  const r = 10;
-  ctx.fillStyle = 'rgba(255,255,255,0.92)';
-  ctx.beginPath();
-  ctx.moveTo(r, 0);
-  ctx.arcTo(w, 0, w, h, r);
-  ctx.arcTo(w, h, 0, h, r);
-  ctx.arcTo(0, h, 0, 0, r);
-  ctx.arcTo(0, 0, w, 0, r);
-  ctx.closePath();
-  ctx.fill();
-  ctx.fillStyle = '#171951';
-  ctx.fillText(label, pad, h / 2 + 1);
-
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.needsUpdate = true;
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
-  const textHeight = 6; // world units
-  sprite.scale.set((textHeight * w) / h, textHeight, 1);
-  sprite.position.set(0, 8, 0); // ノードの少し上に表示
-  return sprite;
 }
