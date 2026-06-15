@@ -13,6 +13,7 @@
 import { sanitizeUserInput } from './llm';
 import { generateVertexImage, VertexImageError } from './vertexImageGen';
 import { generateAiStudioImagen } from './aiStudioImagen';
+import { renderPlaceholderImage } from './imageOverlay';
 
 export interface GenerateImageOptions {
   prompt: string;
@@ -198,36 +199,64 @@ export function generateImage(opts: GenerateImageOptions): Promise<GenerateImage
   return withImageSlot(() => generateImageInner(opts));
 }
 
-/** 画像生成の実体（プロバイダ選択＋フォールバックチェーン）。 */
+/** 1x1 透明PNG（canvas すら使えない理論上の最終保険）。 */
+const TRANSPARENT_PNG_1x1 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+
+/**
+ * ローカル生成のプレースホルダー画像（タイトル文字入りのブランド背景）。
+ * ネットワーク・APIキー・クォータ不要なので「必ず1枚画像を入れる」最終フォールバック。
+ * modelUsed='placeholder' で記録し、後段のバックフィルが本物のAI画像へ差し替える。
+ */
+function generatePlaceholderImage(opts: GenerateImageOptions): GenerateImageResult {
+  const { w, h } = aspectToWH(opts.aspectRatio || '16:9');
+  const text = (opts.overlayTitle || '').trim() || 'ブログ記事';
+  try {
+    return { base64: renderPlaceholderImage(text, w, h), mimeType: 'image/png', modelUsed: 'placeholder' };
+  } catch (e) {
+    console.warn('[imageGen] プレースホルダー描画失敗 → 透明PNG:', errMsg(e));
+    return { base64: TRANSPARENT_PNG_1x1, mimeType: 'image/png', modelUsed: 'placeholder-empty' };
+  }
+}
+
+/**
+ * 画像生成の実体（プロバイダ選択＋フォールバックチェーン）。
+ * 最終的に必ず画像を返す（throw しない）。全プロバイダ失敗時はローカルのプレースホルダーで「必ず1枚」入れる。
+ */
 async function generateImageInner(opts: GenerateImageOptions): Promise<GenerateImageResult> {
   const provider =
     opts.provider ||
     (process.env.IMAGE_PROVIDER as 'aistudio' | 'vertex' | 'pollinations' | 'gemini' | undefined) ||
     'vertex';
+  try {
+    if (provider === 'pollinations') return await generateWithPollinations(opts);
+    if (provider === 'gemini') return await generateWithGemini(opts);
 
-  if (provider === 'pollinations') return generateWithPollinations(opts);
-  if (provider === 'gemini') return generateWithGemini(opts);
-
-  if (provider === 'aistudio') {
-    try {
-      return await generateAiStudioImagen({ prompt: opts.prompt, aspectRatio: opts.aspectRatio });
-    } catch (e) {
-      console.warn('[imageGen] AI Studio Imagen 失敗 → Vertex フォールバック:', errMsg(e));
+    if (provider === 'aistudio') {
+      try {
+        return await generateAiStudioImagen({ prompt: opts.prompt, aspectRatio: opts.aspectRatio });
+      } catch (e) {
+        console.warn('[imageGen] AI Studio Imagen 失敗 → Vertex フォールバック:', errMsg(e));
+      }
+      try {
+        return await generateVertexWithRetry(opts);
+      } catch (e) {
+        console.warn('[imageGen] Vertex 失敗 → Pollinations フォールバック:', errMsg(e));
+      }
+      return await generateWithPollinations(opts);
     }
+
+    // provider === 'vertex'
     try {
       return await generateVertexWithRetry(opts);
     } catch (e) {
       console.warn('[imageGen] Vertex 失敗 → Pollinations フォールバック:', errMsg(e));
-      return generateWithPollinations(opts);
     }
-  }
-
-  // provider === 'vertex'
-  try {
-    return await generateVertexWithRetry(opts);
+    return await generateWithPollinations(opts);
   } catch (e) {
-    console.warn('[imageGen] Vertex 失敗 → Pollinations フォールバック:', errMsg(e));
-    return generateWithPollinations(opts);
+    // 全プロバイダ失敗 → ローカル・プレースホルダーで必ず1枚入れる（後でバックフィルが本物に差し替え）
+    console.warn('[imageGen] 全プロバイダ失敗 → プレースホルダー画像:', errMsg(e));
+    return generatePlaceholderImage(opts);
   }
 }
 

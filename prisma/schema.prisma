@@ -208,6 +208,7 @@ model ArticleImage {
   dataBase64 String   // 画像のbase64
   prompt     String
   modelUsed  String?
+  isPlaceholder Boolean @default(false) // プレースホルダー(つなぎ)画像か。後でバックフィルが本物のAI画像へ差し替える対象
   createdAt  DateTime @default(now())
 
   @@index([articleId])

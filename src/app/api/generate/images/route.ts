@@ -116,6 +116,7 @@ export async function POST(req: NextRequest) {
             dataBase64: img.base64,
             prompt: prompts.eyecatch,
             modelUsed: img.modelUsed,
+            isPlaceholder: img.modelUsed === 'placeholder' || img.modelUsed === 'placeholder-empty',
           },
         });
         await prisma.article.update({
@@ -153,6 +154,7 @@ export async function POST(req: NextRequest) {
               dataBase64: img.base64,
               prompt,
               modelUsed: img.modelUsed,
+              isPlaceholder: img.modelUsed === 'placeholder' || img.modelUsed === 'placeholder-empty',
             },
           });
           generated.push({ id: saved.id, kind: 'h2', h2Index: idx });

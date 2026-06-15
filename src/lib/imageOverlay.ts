@@ -176,3 +176,55 @@ export async function overlayTitleBar(imageBase64: string, title: string): Promi
   const out = await canvas.encode('png');
   return out.toString('base64');
 }
+
+/**
+ * ローカル生成のプレースホルダー画像（タイトル文字入りのブランド背景）の base64(PNG) を返す。
+ * ネットワーク・APIキー・クォータ不要なので「必ず1枚画像を入れる」最終フォールバックに使う。
+ * 後段のバックフィルが本物のAI画像へ差し替える前提の“つなぎ”。
+ */
+export function renderPlaceholderImage(title: string, w = 1280, h = 720): string {
+  ensureFont();
+  const canvas = createCanvas(w, h);
+  const ctx = canvas.getContext('2d');
+
+  // ブランド配色のグラデーション背景（濃紺→ティール）
+  const grad = ctx.createLinearGradient(0, 0, w, h);
+  grad.addColorStop(0, '#0f2a43');
+  grad.addColorStop(1, '#1f6f78');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+
+  // 内側の薄い枠
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+  ctx.lineWidth = Math.max(2, Math.round(w * 0.004));
+  roundedRect(ctx, w * 0.04, h * 0.06, w * 0.92, h * 0.88, Math.round(h * 0.04));
+  ctx.stroke();
+
+  // タイトル文字（中央・最大2行）
+  const clean = (title || '').replace(/\s+/g, ' ').trim() || '画像を準備中';
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#ffffff';
+  const maxW = w * 0.82;
+  let fontSize = Math.round(h * 0.13);
+  ctx.font = `900 ${fontSize}px "${FONT_FAMILY}"`;
+  let lines: string[] = [clean];
+  if (ctx.measureText(clean).width > maxW) {
+    lines = splitTitle(clean, ctx, maxW, fontSize);
+    fontSize = Math.round(h * 0.1);
+    ctx.font = `900 ${fontSize}px "${FONT_FAMILY}"`;
+    let attempts = 0;
+    while (attempts < 40 && Math.max(...lines.map((l) => ctx.measureText(l).width)) > maxW && fontSize > 20) {
+      fontSize -= 2;
+      ctx.font = `900 ${fontSize}px "${FONT_FAMILY}"`;
+      attempts++;
+    }
+  }
+  const lh = fontSize * 1.2;
+  const startY = h / 2 - (lh * lines.length) / 2 + lh / 2;
+  lines.forEach((l, i) => ctx.fillText(l, w / 2, startY + i * lh));
+  ctx.restore();
+
+  return canvas.toBuffer('image/png').toString('base64');
+}
