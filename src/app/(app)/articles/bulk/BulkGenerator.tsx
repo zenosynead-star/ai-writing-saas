@@ -175,28 +175,35 @@ export default function BulkGenerator() {
     }
   };
 
-  /** マウント時: localStorage に jobId があれば復元 */
+  /** マウント時: localStorage の jobId、無ければサーバーの「実行中ジョブ」を復元（更新/別端末でもキューを表示） */
   useEffect(() => {
-    const savedId = localStorage.getItem(LS_KEY);
-    if (!savedId) return;
-
     (async () => {
       try {
-        const res = await fetch(`/api/articles/bulk/status?jobId=${encodeURIComponent(savedId)}`);
+        let id = localStorage.getItem(LS_KEY);
+        if (!id) {
+          // localStorage が無くても、進行中の一括ジョブがあれば拾って表示する
+          const lr = await fetch('/api/articles/bulk/latest');
+          if (lr.ok) {
+            const ld = (await lr.json()) as { jobId?: string | null };
+            if (ld.jobId) id = ld.jobId;
+          }
+        }
+        if (!id) return;
+
+        const res = await fetch(`/api/articles/bulk/status?jobId=${encodeURIComponent(id)}`);
         if (!res.ok) return;
         const data: BulkStatusResponse = await res.json();
         setRows(buildRows(data));
         setCounts(data.counts);
-        setJobId(savedId);
+        setJobId(id);
+        localStorage.setItem(LS_KEY, id);
 
         const isRunning =
-          data.job.status === 'running' ||
-          data.counts.processing > 0 ||
-          data.counts.pending > 0;
+          data.job.status === 'running' || data.counts.processing > 0 || data.counts.pending > 0;
         if (isRunning) {
           setRunning(true);
           pollingRef.current = true;
-          scheduleNextPoll(savedId);
+          scheduleNextPoll(id);
         }
       } catch {
         // 復元失敗は無視
