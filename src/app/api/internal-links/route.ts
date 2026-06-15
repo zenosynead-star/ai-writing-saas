@@ -17,6 +17,7 @@ export const dynamic = 'force-dynamic';
 interface GraphNode {
   id: string;
   title: string;
+  keyword: string; // 記事のターゲットKW（keywords を半角スペース連結）。可視化の主ラベル
   status: string;
   outDegree: number;
   inDegree: number;
@@ -26,17 +27,31 @@ interface GraphLink {
   target: string;
 }
 
+/** keywords(JSON配列) を半角スペース連結の表示用KWにする。空なら空文字。 */
+function parseKeyword(json: string | null): string {
+  try {
+    const k = JSON.parse(json || '[]');
+    if (Array.isArray(k) && k.length > 0) return k.map(String).join(' ');
+  } catch {
+    /* ignore */
+  }
+  return '';
+}
+
 export async function GET() {
   const user = await getCurrentUser();
+  // 「リンクマップ＝公開中の記事の内部リンク構造」。下書き/生成中/失敗/未公開は数にもグラフにも含めない
+  // （記事数を“実際に公開されている記事数”に一致させる。ユーザー要望）。
   const articles = await prisma.article.findMany({
-    where: { userId: user.id },
-    select: { id: true, title: true, status: true, bodyHtml: true, sourceUrl: true, wpPostId: true },
+    where: { userId: user.id, wpPostId: { not: null }, wpPostStatus: 'publish' },
+    select: { id: true, title: true, keywords: true, status: true, bodyHtml: true, sourceUrl: true, wpPostId: true },
     orderBy: { createdAt: 'desc' },
   });
 
   const nodes: GraphNode[] = articles.map((a) => ({
     id: a.id,
     title: a.title || '（無題）',
+    keyword: parseKeyword(a.keywords) || a.title || '（無題）',
     status: a.status,
     outDegree: 0,
     inDegree: 0,
