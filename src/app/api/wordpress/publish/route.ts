@@ -12,6 +12,7 @@ import {
   type WpCredentials,
 } from '@/lib/wordpress';
 import { stripExistingH2Images } from '@/lib/imageEmbed';
+import { generateImage } from '@/lib/imageGen';
 import { generate, extractJson, BASE_SYSTEM } from '@/lib/llm';
 import { CATEGORY_PICK_PROMPT, PHARMA_CHECK_PROMPT } from '@/lib/prompts';
 import { requestIndexing } from '@/lib/indexing';
@@ -150,10 +151,33 @@ export async function POST(req: NextRequest) {
         for (const img of h2Imgs) {
           const idx = img.h2Index ?? 0;
           const altText = `${article.title} - セクション${idx + 1}`;
+          // 容量対策で公開後に base64 を空にした記事の再公開/バックフィル時は、
+          // 保存済みプロンプトから画像を作り直してからアップロードする（再公開を壊さない）。
+          let b64 = img.dataBase64;
+          let mime = img.mimeType;
+          if (!b64) {
+            try {
+              const re = await generateImage({ prompt: img.prompt, aspectRatio: '16:9', overlayTitle: altText });
+              b64 = re.base64;
+              mime = re.mimeType;
+              // 再生成でも本物が取れず placeholder 止まりなら isPlaceholder を立て直す。
+              // (公開後に base64 をクリアすると後段の updateMany 後は isPlaceholder=false のまま
+              //  残るため、立て直さないと backfill タイマーが拾えず placeholder が WP に固定される)
+              const stillPlaceholder = re.modelUsed === 'placeholder' || re.modelUsed === 'placeholder-empty';
+              if (stillPlaceholder && !img.isPlaceholder) {
+                await prisma.articleImage
+                  .update({ where: { id: img.id }, data: { isPlaceholder: true } })
+                  .catch(() => {});
+              }
+            } catch (e) {
+              console.warn('[wordpress/publish] h2画像 再生成失敗:', (e as Error).message);
+            }
+          }
+          if (!b64) continue; // それでも画像が無ければこの h2 はスキップ
           const uploaded = await uploadMedia(creds, {
-            filename: `h2-${article.id}-${idx}.${(img.mimeType.split('/')[1] || 'jpg').replace('jpeg', 'jpg')}`,
-            mimeType: img.mimeType,
-            dataBase64: img.dataBase64,
+            filename: `h2-${article.id}-${idx}.${(mime.split('/')[1] || 'jpg').replace('jpeg', 'jpg')}`,
+            mimeType: mime,
+            dataBase64: b64,
             altText,
           });
           uploadedByH2Index.set(idx, { url: uploaded.sourceUrl, alt: altText });
@@ -263,6 +287,15 @@ export async function POST(req: NextRequest) {
       where: { id: articleId },
       data: { wpPostId: post.id, wpPostStatus: post.status },
     });
+
+    // ===== 容量対策: 公開済みの h2 画像は WP 側に存在するので、DB の base64 を空にして肥大化を防ぐ =====
+    // (アイキャッチは記事一覧のサムネ用に保持。再公開/バックフィル時は上の h2 処理が base64 を作り直す。)
+    // Neon の容量上限(画像base64が主因で512MB到達)対策。失敗しても公開は成功扱い。
+    if (uploadImages) {
+      await prisma.articleImage
+        .updateMany({ where: { articleId, kind: 'h2' }, data: { dataBase64: '' } })
+        .catch(() => {});
+    }
 
     // 公開時のみ Google Indexing API に即通知（ソフト・失敗しても公開は成功扱い）
     let indexRequested = false;
