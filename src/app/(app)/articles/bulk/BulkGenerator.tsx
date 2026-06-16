@@ -325,6 +325,47 @@ export default function BulkGenerator() {
     setError(null);
   };
 
+  /** エラー行を1件だけ手動で再実行（公開だけ失敗→再公開 / 生成不完全→作り直し をサーバが自動判定）。 */
+  const retryItem = async (articleId?: string) => {
+    if (!articleId) return;
+    setError(null);
+    try {
+      const res = await fetch('/api/articles/bulk/retry-item', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ articleId }),
+      });
+      const d = (await res.json().catch(() => ({}))) as { jobId?: string; error?: string };
+      if (!res.ok) {
+        setError(d.error || '再実行の開始に失敗しました');
+        return;
+      }
+      // 再実行を開始したのでポーリング再開（その行が処理中→完了に変わる）。
+      const id = d.jobId || jobId;
+      if (id) {
+        setRunning(true);
+        startPolling(id);
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  /**
+   * その行がエラー等で再実行が必要か（公開失敗・生成失敗・簡易内容・画像取得失敗）。
+   * 対象は「処理が終端した行」だけ（rawState=done/failed/stopped）。pending/processing/
+   * generated/publishing はまだ自動で処理中/処理待ちなので、注記文言に該当しても出さない
+   * （サーバ側 retry-item も終端状態からしか再投入しないので意味論を一致させる）。
+   */
+  const rowNeedsRetry = (r: Row): boolean =>
+    !!r.articleId &&
+    (r.rawState === 'done' || r.rawState === 'failed' || r.rawState === 'stopped') &&
+    (r.status === 'failed' ||
+      !!r.pub?.startsWith('公開失敗') ||
+      !!r.error?.includes('簡易内容') ||
+      !!r.error?.includes('取得できませんでした') ||
+      !!r.error?.includes('生成失敗'));
+
   // 表示用カウント
   const doneCount = counts?.done ?? rows.filter((r) => r.status === 'done').length;
   const failedCount = counts?.failed ?? rows.filter((r) => r.status === 'failed').length;
@@ -629,11 +670,22 @@ export default function BulkGenerator() {
                   )}
                   {r.error && <div className="text-xs text-red-600">{r.error}</div>}
                 </div>
-                {(r.status === 'done' || r.status === 'skipped') && r.articleId && (
-                  <Link href={`/articles/${r.articleId}`} className="text-sm font-bold text-teal-mid hover:underline shrink-0">
-                    {r.status === 'skipped' ? '既存記事' : '編集'} →
-                  </Link>
-                )}
+                <div className="flex items-center gap-3 shrink-0">
+                  {rowNeedsRetry(r) && (
+                    <button
+                      type="button"
+                      onClick={() => retryItem(r.articleId)}
+                      className="text-sm font-bold px-3 py-1 rounded-[5px] border border-teal text-teal-mid hover:bg-teal hover:text-white transition-colors"
+                    >
+                      ↻ 再実行
+                    </button>
+                  )}
+                  {(r.status === 'done' || r.status === 'skipped') && r.articleId && (
+                    <Link href={`/articles/${r.articleId}`} className="text-sm font-bold text-teal-mid hover:underline">
+                      {r.status === 'skipped' ? '既存記事' : '編集'} →
+                    </Link>
+                  )}
+                </div>
               </li>
             ))}
           </ul>

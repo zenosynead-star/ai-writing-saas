@@ -32,31 +32,53 @@ interface BulkParams {
 
 // 同一プロセス内でプロセッサのループが多重に走らないようにするフラグ。
 let processing = false;
+// 実行中に来た起動要求(retry-item の再公開/作り直し、実行中ジョブへの後続投入など)を
+// 取りこぼさないための「もう一巡して」フラグ。busy 中の起動は握り潰さず、現行ループ終了後に
+// 必ずもう一周させる。これがないと、戻した記事を拾うワーカーが既に return 済みだと
+// watchdog(数十分間隔)まで放置されうる。
+let rerunRequested = false;
 export function isBulkProcessing(): boolean {
   return processing;
 }
 
 /**
  * 生成(並列) ＋ 公開(直列・上から順) を、対象が無くなるまで走らせる。
- * 既に別ループが走っていれば何もしない。
+ * 既に別ループが走っている場合は「もう一巡して」とマークだけして即返す。現行ループは
+ * 終了時にそのマークを見て、対象が無くなるまで自分でもう一周する（取りこぼし防止）。
  */
 export async function runBulkProcessor(jobId?: string): Promise<{ started: boolean; processed: number }> {
-  if (processing) return { started: false, processed: 0 };
+  if (processing) {
+    rerunRequested = true;
+    return { started: false, processed: 0 };
+  }
   processing = true;
   let processed = 0;
   try {
-    await resetOrphans(jobId);
-    const genN = await resolveGenConcurrency(jobId);
-    // 生成ワーカー(並列) と 公開ワーカー(1) を同時に走らせる。
-    // 生成が 'generated' を積み、公開が上から順に取り出して公開する。
-    const genWorkers = Array.from({ length: genN }, () => genWorker(jobId));
-    const results = await Promise.all([...genWorkers, pubWorker(jobId)]);
-    processed = results.reduce((a, b) => a + (b || 0), 0);
-    await finalizeJobs(jobId);
+    // 初回は要求された jobId を、ループ実行中に来た追加要求(retry-item 等)を拾う2巡目以降は
+    // 全 running ジョブ(scope=undefined)を対象に一巡する。追加要求が別ジョブ宛でも取りこぼさない。
+    let scope = jobId;
+    do {
+      rerunRequested = false;
+      processed += await runOnce(scope);
+      scope = undefined;
+    } while (rerunRequested);
   } finally {
     processing = false;
   }
   return { started: true, processed };
+}
+
+/** 生成(並列)＋公開(直列)を1巡し、最後にジョブ完了判定を行う。 */
+async function runOnce(jobId?: string): Promise<number> {
+  await resetOrphans(jobId);
+  const genN = await resolveGenConcurrency(jobId);
+  // 生成ワーカー(並列) と 公開ワーカー(1) を同時に走らせる。
+  // 生成が 'generated' を積み、公開が上から順に取り出して公開する。
+  const genWorkers = Array.from({ length: genN }, () => genWorker(jobId));
+  const results = await Promise.all([...genWorkers, pubWorker(jobId)]);
+  const processed = results.reduce((a, b) => a + (b || 0), 0);
+  await finalizeJobs(jobId);
+  return processed;
 }
 
 async function resolveGenConcurrency(jobId?: string): Promise<number> {
