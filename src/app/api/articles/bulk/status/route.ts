@@ -64,6 +64,8 @@ export async function GET(req: NextRequest) {
       failed: items.filter((i) => i.state === 'failed').length,
       processing: items.filter((i) => i.state === 'processing').length,
       pending: items.filter((i) => i.state === 'pending').length,
+      generated: items.filter((i) => i.state === 'generated').length, // 公開待ち
+      publishing: items.filter((i) => i.state === 'publishing').length, // 公開中
       stopped: items.filter((i) => i.state === 'stopped').length,
     };
 

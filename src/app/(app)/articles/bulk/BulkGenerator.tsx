@@ -23,7 +23,7 @@ interface BulkStatusItem {
   articleId: string;
   keyword: string;
   title?: string;
-  state: 'pending' | 'processing' | 'done' | 'failed' | 'stopped';
+  state: 'pending' | 'processing' | 'generated' | 'publishing' | 'done' | 'failed' | 'stopped';
   stage: string;
   note?: string;
   pub?: string;
@@ -35,6 +35,8 @@ interface BulkStatusCounts {
   failed: number;
   processing: number;
   pending: number;
+  generated: number;
+  publishing: number;
   stopped: number;
 }
 interface BulkStatusResponse {
@@ -50,12 +52,14 @@ const POLL_INTERVAL_MS = 4000;
 /** サーバーの item.state を Row の status にマッピング */
 function itemStateToRowStatus(state: BulkStatusItem['state']): RowStatus {
   switch (state) {
-    case 'processing': return 'running';
-    case 'done':       return 'done';
-    case 'failed':     return 'failed';
-    case 'stopped':    return 'stopped';
+    case 'processing':  return 'running'; // 生成中
+    case 'generated':   return 'running'; // 公開待ち
+    case 'publishing':  return 'running'; // 公開中
+    case 'done':        return 'done';
+    case 'failed':      return 'failed';
+    case 'stopped':     return 'stopped';
     case 'pending':
-    default:           return 'pending';
+    default:            return 'pending';
   }
 }
 
@@ -89,7 +93,7 @@ export default function BulkGenerator() {
   const [useCompetitor, setUseCompetitor] = useState(true);
   const [useWebSearch, setUseWebSearch] = useState(false);
   const [skipPublished, setSkipPublished] = useState(true);
-  const parallelism = 1; // サーバーは「上から順に1件ずつ」処理（同時実行は廃止）
+  const [parallelism, setParallelism] = useState(2); // 生成フェーズの同時数（公開は常に上から順1件ずつ）
   const [imageMode, setImageMode] = useState<ImageMode>('none');
   const [wpPublish, setWpPublish] = useState<WpPublish>('none');
   const [targetChars, setTargetChars] = useState<number>(0);
@@ -127,11 +131,14 @@ export default function BulkGenerator() {
       setRows(buildRows(data));
       setCounts(data.counts);
 
-      // 完了条件: job が done/stopped かつ処理中・待機中が 0
+      // 完了条件: job が done/stopped かつ 未完了(生成中/待機/公開待ち/公開中)が 0
+      const c = data.counts;
       const finished =
         (data.job.status === 'done' || data.job.status === 'stopped') &&
-        data.counts.processing === 0 &&
-        data.counts.pending === 0;
+        c.processing === 0 &&
+        c.pending === 0 &&
+        c.generated === 0 &&
+        c.publishing === 0;
       return finished;
     } catch {
       // ネットワーク瞬断は握りつぶしてポーリング継続
@@ -198,8 +205,13 @@ export default function BulkGenerator() {
         setJobId(id);
         localStorage.setItem(LS_KEY, id);
 
+        const c = data.counts;
         const isRunning =
-          data.job.status === 'running' || data.counts.processing > 0 || data.counts.pending > 0;
+          data.job.status === 'running' ||
+          c.processing > 0 ||
+          c.pending > 0 ||
+          c.generated > 0 ||
+          c.publishing > 0;
         if (isRunning) {
           setRunning(true);
           pollingRef.current = true;
@@ -359,9 +371,20 @@ export default function BulkGenerator() {
             </div>
           </div>
           <div>
-            <span className="label">処理順</span>
-            <div className="flex items-center h-[34px] px-3 rounded-[5px] border border-line bg-bluepaper text-sm font-bold text-navy">
-              上から順に1件ずつ
+            <span className="label">生成の同時数（公開は上から順）</span>
+            <div className="flex gap-1.5">
+              {([2, 3, 4] as const).map((n) => (
+                <button
+                  key={n}
+                  onClick={() => setParallelism(n)}
+                  disabled={running}
+                  className={`px-3 py-1.5 rounded-[5px] text-sm font-bold border ${
+                    parallelism === n ? 'bg-teal text-white border-teal' : 'bg-white text-navy border-line hover:bg-bluepaper'
+                  }`}
+                >
+                  {n}
+                </button>
+              ))}
             </div>
           </div>
           <div>
@@ -457,6 +480,9 @@ export default function BulkGenerator() {
             {stopping && ' ／ 停止リクエスト受付：実行中の記事が終わり次第とまります。'}
           </p>
         )}
+        <p className="text-xs text-sub">
+          ※ 本文・画像の生成は<strong>同時 {parallelism} 件で並列</strong>、WordPress公開は<strong>一覧の上から順に1件ずつ</strong>処理します（上の記事が出来次第そこから公開。下が先に出来ても上を待ちます）。
+        </p>
         {wpPublish !== 'none' && (
           <p className="text-xs text-amber-600">
             ※ WordPress{wpPublish === 'publish' ? '即公開' : '下書き'}ON: 本文→画像→{wpPublish === 'publish' ? '公開' : '下書き投稿'}まで自動。

@@ -24,9 +24,8 @@ const Schema = z.object({
   imageMode: z.enum(['none', 'eyecatch', 'full']).optional().default('none'),
   wpPublish: z.enum(['none', 'draft', 'publish']).optional().default('none'),
   targetChars: z.number().int().min(0).max(50000).optional().default(0),
-  // 後方互換のため受理するが現在は未使用。プロセッサは常に「上から順に1件ずつ」処理する
-  //（同時実行は廃止＝Vertex の 429 低減のため記事も画像も直列化）。
-  parallelism: z.number().int().min(1).max(4).optional().default(1),
+  // 生成フェーズの並列数(1〜4)。公開フェーズは常に上から順1件ずつ（並列にしない）。
+  parallelism: z.number().int().min(1).max(4).optional().default(2),
 });
 
 /**

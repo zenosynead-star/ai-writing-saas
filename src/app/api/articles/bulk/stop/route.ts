@@ -17,8 +17,10 @@ export async function POST(req: NextRequest) {
     if (!job) return NextResponse.json({ error: 'ジョブが見つかりません' }, { status: 404 });
 
     await prisma.bulkJob.update({ where: { id: jobId }, data: { status: 'stopped' } });
+    // 未着手(pending)と公開待ち(generated)を停止に。処理中(processing)/公開中(publishing)は
+    // 各ワーカーが次のステップ前にジョブ停止を見て止まる。
     await prisma.article.updateMany({
-      where: { bulkJobId: jobId, bulkState: 'pending' },
+      where: { bulkJobId: jobId, bulkState: { in: ['pending', 'generated'] } },
       data: { bulkState: 'stopped', bulkStage: '' },
     });
     return NextResponse.json({ ok: true });
