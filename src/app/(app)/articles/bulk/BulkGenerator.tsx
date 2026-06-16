@@ -12,6 +12,7 @@ interface Row {
   articleId?: string;
   title?: string;
   status: RowStatus;
+  rawState?: 'pending' | 'processing' | 'generated' | 'publishing' | 'done' | 'failed' | 'stopped';
   stage?: string;
   error?: string;
   pub?: string;
@@ -77,6 +78,7 @@ function buildRows(data: BulkStatusResponse): Row[] {
     articleId: item.articleId,
     title: item.title,
     status: itemStateToRowStatus(item.state),
+    rawState: item.state,
     stage: item.stage,
     error: item.note,
     pub: item.pub,
@@ -329,6 +331,10 @@ export default function BulkGenerator() {
   const skippedCount = rows.filter((r) => r.status === 'skipped').length;
   const publishedCount = rows.filter((r) => r.pub === '公開済み').length;
   const genTotal = counts?.total ?? rows.filter((r) => r.status !== 'skipped').length;
+  // いま実際に動いている行（生成中・公開中）と、公開待ちの行。可視化用。
+  const generatingRows = rows.filter((r) => r.rawState === 'processing');
+  const publishingRows = rows.filter((r) => r.rawState === 'publishing');
+  const waitingCount = counts?.generated ?? rows.filter((r) => r.rawState === 'generated').length;
 
   return (
     <div className="space-y-6">
@@ -516,6 +522,40 @@ export default function BulkGenerator() {
         )}
       </div>
 
+      {/* 現在処理中のKWを大きく可視化（並列で複数同時に動くため） */}
+      {running && (generatingRows.length > 0 || publishingRows.length > 0 || waitingCount > 0) && (
+        <div className="card p-4 border-l-4 border-teal bg-teal/5 space-y-2">
+          <div className="text-sm font-bold text-navy flex items-center gap-2">
+            <span className="w-4 h-4 rounded-full border-2 border-teal border-t-transparent animate-spin inline-block shrink-0" />
+            現在処理中（生成は並列・公開は上から順）
+          </div>
+          {generatingRows.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs font-bold text-teal-mid bg-teal/10 rounded px-2 py-0.5 shrink-0">生成中 {generatingRows.length}</span>
+              {generatingRows.map((r, i) => (
+                <span key={r.articleId || `g${i}`} className="text-sm bg-white border border-teal/40 rounded px-2 py-0.5">
+                  <span className="font-bold text-navy">{r.keyword}</span>
+                  {r.stage && <span className="text-xs text-teal-mid ml-1">{r.stage}</span>}
+                </span>
+              ))}
+            </div>
+          )}
+          {publishingRows.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs font-bold text-white bg-teal rounded px-2 py-0.5 shrink-0">公開中 {publishingRows.length}</span>
+              {publishingRows.map((r, i) => (
+                <span key={r.articleId || `p${i}`} className="text-sm bg-white border border-teal/40 rounded px-2 py-0.5 font-bold text-navy">
+                  {r.keyword}
+                </span>
+              ))}
+            </div>
+          )}
+          {waitingCount > 0 && (
+            <div className="text-xs text-sub">⏳ 公開待ち {waitingCount}件（生成済み・上から順に公開されます）</div>
+          )}
+        </div>
+      )}
+
       {rows.length > 0 && (
         <div className="card p-6">
           <h2 className="section-title mb-4">
@@ -526,13 +566,31 @@ export default function BulkGenerator() {
           </h2>
           <ul className="divide-y divide-line">
             {rows.map((r, i) => (
-              <li key={r.articleId || `row-${i}`} className="py-3 flex items-center gap-3">
+              <li
+                key={r.articleId || `row-${i}`}
+                className={`py-3 pl-3 flex items-center gap-3 border-l-4 ${
+                  r.rawState === 'processing' || r.rawState === 'publishing'
+                    ? 'border-teal bg-teal/5'
+                    : r.rawState === 'generated'
+                      ? 'border-amber-300 bg-amber-50/50'
+                      : 'border-transparent'
+                }`}
+              >
                 <StatusIcon status={r.status} />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-bold text-navy truncate">{r.title || r.keyword}</div>
                   {r.title && <div className="text-xs text-sub truncate">KW: {r.keyword}</div>}
-                  {r.status === 'running' && r.stage && (
-                    <div className="text-xs text-teal-mid">{r.stage}</div>
+                  {r.status === 'running' && (
+                    <div className="text-xs mt-0.5">
+                      <span className="inline-flex items-center gap-1 font-bold text-teal-mid">
+                        <span className="w-2 h-2 rounded-full bg-teal animate-pulse inline-block shrink-0" />
+                        {r.rawState === 'generated'
+                          ? '公開待ち'
+                          : r.rawState === 'publishing'
+                            ? '公開中'
+                            : `生成中${r.stage ? `（${r.stage}）` : ''}`}
+                      </span>
+                    </div>
                   )}
                   {r.status === 'skipped' && (
                     <div className="text-xs text-amber-600">
