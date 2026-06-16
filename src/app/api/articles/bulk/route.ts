@@ -131,8 +131,13 @@ export async function POST(req: NextRequest) {
     const job = await prisma.bulkJob.create({
       data: { userId: user.id, status: 'running', params, total: toCreate.length, skipped: JSON.stringify(skipped) },
     });
+    // createMany は全件 createdAt=now() で同一になり、createdAt 昇順の並びが不定になる。
+    // すると生成順(claim)・公開順(上から1件ずつ)・表示順がバラバラになり、公開ワーカーが
+    // 「自分基準の先頭(未生成の記事)」を待ち続けて公開待ちが滞留する。
+    // 入力(上から)の順を確定させるため createdAt を 1ms ずつずらして付与する。
+    const baseTime = Date.now();
     await prisma.article.createMany({
-      data: toCreate.map((kwList) => ({
+      data: toCreate.map((kwList, i) => ({
         userId: user.id,
         title: '',
         keywords: JSON.stringify(kwList),
@@ -141,6 +146,7 @@ export async function POST(req: NextRequest) {
         bulkJobId: job.id,
         bulkState: 'pending',
         bulkAttempts: 0,
+        createdAt: new Date(baseTime + i),
       })),
     });
 

@@ -143,7 +143,7 @@ async function claimForGenerate(jobId?: string): Promise<string | null> {
     },
     select: { id: true, bulkState: true, bulkClaimedAt: true, bulkJobId: true },
     take: 12,
-    orderBy: { createdAt: 'asc' },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], // createdAt 同値でも安定(上から順)に
   });
   for (const c of candidates) {
     const where =
@@ -275,7 +275,7 @@ async function nextPublishable(jobId?: string): Promise<'DONE' | 'WAIT' | string
   const arts = await prisma.article.findMany({
     where: { bulkJobId: jobId ? jobId : { not: null } },
     select: { id: true, bulkState: true },
-    orderBy: { createdAt: 'asc' },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], // createdAt 同値でも安定(上から順)に
   });
   let anyNonTerminal = false;
   for (const a of arts) {

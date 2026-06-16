@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
         bulkPub: true,
         bulkWpLink: true,
       },
-      orderBy: { createdAt: 'asc' },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], // createdAt 同値でも安定(上から順)に
     });
 
     const items = arts.map((a) => {
