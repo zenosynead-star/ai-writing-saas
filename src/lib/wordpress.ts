@@ -72,33 +72,57 @@ export interface UploadedMedia {
   sourceUrl: string;
 }
 
+// WP/Cloudflare が画像アップロードで一時的に返しうるエラー（サーバ過負荷・原ORIGIN落ち等）。
+// これらは間欠的なのでバックオフして再試行すれば多くは成功する。4xx の恒久エラーは即終了。
+const UPLOAD_RETRYABLE = new Set([408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524]);
+
 export async function uploadMedia(creds: WpCredentials, input: UploadMediaInput): Promise<UploadedMedia> {
   const buf = Buffer.from(input.dataBase64, 'base64');
-  const blob = new Blob([buf], { type: input.mimeType });
-  // WordPress media endpoint expects multipart/form-data via Content-Disposition header
+  // WordPress media endpoint expects the raw bytes via Content-Disposition header
   const url = `${creds.siteUrl.replace(/\/$/, '')}/wp-json/wp/v2/media`;
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), 60_000);
-  try {
-    const resp = await fetch(url, {
-      method: 'POST',
-      signal: ac.signal,
-      headers: {
-        Authorization: authHeader(creds),
-        'User-Agent': WP_USER_AGENT,
-        'Content-Type': input.mimeType,
-        'Content-Disposition': `attachment; filename="${input.filename}"`,
-      },
-      body: blob,
-    });
-    if (!resp.ok) {
-      throw new WpError(resp.status, `メディアアップロード失敗 (HTTP ${resp.status}): ${await resp.text().then((t) => t.slice(0, 200))}`);
+  const MAX_ATTEMPTS = 4;
+  let lastErr: WpError | null = null;
+
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    if (attempt > 0) {
+      // バックオフ: 1.5s, 3.5s, 6s（WPサーバの一時過負荷が収まるのを待つ）
+      await new Promise((r) => setTimeout(r, 1500 + (attempt - 1) * 2000 + Math.floor(Math.random() * 800)));
     }
-    const data = (await resp.json()) as { id: number; source_url: string };
-    return { id: data.id, sourceUrl: data.source_url };
-  } finally {
-    clearTimeout(timer);
+    const blob = new Blob([buf], { type: input.mimeType });
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 90_000); // 画像は大きめなので 90 秒
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        signal: ac.signal,
+        headers: {
+          Authorization: authHeader(creds),
+          'User-Agent': WP_USER_AGENT,
+          'Content-Type': input.mimeType,
+          'Content-Disposition': `attachment; filename="${input.filename}"`,
+        },
+        body: blob,
+      });
+      if (resp.ok) {
+        const data = (await resp.json()) as { id: number; source_url: string };
+        return { id: data.id, sourceUrl: data.source_url };
+      }
+      const text = await resp.text().catch(() => '');
+      lastErr = new WpError(resp.status, `メディアアップロード失敗 (HTTP ${resp.status}): ${text.slice(0, 150)}`);
+      if (!UPLOAD_RETRYABLE.has(resp.status)) throw lastErr; // 恒久エラーは即終了
+    } catch (e) {
+      if (e instanceof WpError) {
+        if (!UPLOAD_RETRYABLE.has(e.statusCode)) throw e; // 非リトライは即終了
+        lastErr = e;
+      } else {
+        // ネットワーク/タイムアウト(AbortError 等)はリトライ対象
+        lastErr = new WpError(0, `メディアアップロード接続失敗: ${(e as Error).message?.slice(0, 120) || 'network'}`);
+      }
+    } finally {
+      clearTimeout(timer);
+    }
   }
+  throw lastErr ?? new WpError(500, 'メディアアップロード失敗（リトライ上限）');
 }
 
 export async function setMediaAltText(creds: WpCredentials, mediaId: number, alt: string): Promise<void> {

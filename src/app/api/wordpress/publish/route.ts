@@ -122,19 +122,25 @@ export async function POST(req: NextRequest) {
 
     let bodyHtml = article.bodyHtml;
     let featuredMediaId: number | undefined;
+    let imageUploadFails = 0; // 画像アップロードに失敗した枚数（公開自体は止めない）
 
     if (uploadImages) {
-      // アイキャッチをアップロード
+      // アイキャッチをアップロード（失敗しても公開は止めず、featured 画像なしで続行）
       const eyecatch = article.articleImages.find((i) => i.kind === 'eyecatch');
-      if (eyecatch) {
-        const m = await uploadMedia(creds, {
-          filename: `eyecatch-${article.id}.png`,
-          mimeType: eyecatch.mimeType,
-          dataBase64: eyecatch.dataBase64,
-          altText: article.title,
-        });
-        await setMediaAltText(creds, m.id, article.title).catch(() => {});
-        featuredMediaId = m.id;
+      if (eyecatch && eyecatch.dataBase64) {
+        try {
+          const m = await uploadMedia(creds, {
+            filename: `eyecatch-${article.id}.png`,
+            mimeType: eyecatch.mimeType,
+            dataBase64: eyecatch.dataBase64,
+            altText: article.title,
+          });
+          await setMediaAltText(creds, m.id, article.title).catch(() => {});
+          featuredMediaId = m.id;
+        } catch (e) {
+          imageUploadFails++;
+          console.warn('[wordpress/publish] アイキャッチ アップロード失敗(公開は継続):', (e as Error).message);
+        }
       }
 
       // h2 画像をアップロードして本文に挿入
@@ -180,13 +186,21 @@ export async function POST(req: NextRequest) {
             }
           }
           if (!b64) continue; // 画像が無い / placeholder 止まりならこの h2 はスキップ
-          const uploaded = await uploadMedia(creds, {
-            filename: `h2-${article.id}-${idx}.${(mime.split('/')[1] || 'jpg').replace('jpeg', 'jpg')}`,
-            mimeType: mime,
-            dataBase64: b64,
-            altText,
-          });
-          uploadedByH2Index.set(idx, { url: uploaded.sourceUrl, alt: altText });
+          try {
+            const uploaded = await uploadMedia(creds, {
+              filename: `h2-${article.id}-${idx}.${(mime.split('/')[1] || 'jpg').replace('jpeg', 'jpg')}`,
+              mimeType: mime,
+              dataBase64: b64,
+              altText,
+            });
+            uploadedByH2Index.set(idx, { url: uploaded.sourceUrl, alt: altText });
+          } catch (e) {
+            // この h2 画像のアップロードに失敗 → この画像だけ飛ばして公開は継続（公開失敗にしない）
+            imageUploadFails++;
+            console.warn(`[wordpress/publish] h2画像 アップロード失敗(スキップ) idx=${idx}:`, (e as Error).message);
+          }
+          // WPサーバの負荷を分散（連続アップロードで 500/520 が出やすいため）
+          await new Promise((r) => setTimeout(r, 400));
         }
 
         // h2 タグの直後に WP用 <figure> を挿入
@@ -317,6 +331,7 @@ export async function POST(req: NextRequest) {
       link: post.link,
       status: post.status,
       heldForPharma,
+      imageUploadFails, // 画像アップロードに失敗した枚数（公開は成功・画像は後で補完可）
       indexRequested,
       tagsSet: tagIds.length,
       categoriesSet: categoryIds.length,

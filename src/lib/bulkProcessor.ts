@@ -303,7 +303,7 @@ async function publishArticle(aid: string): Promise<void> {
 
   let pub: string | undefined;
   let wpLink: string | undefined;
-  const pr = await internalPost<{ error?: string; status?: string; link?: string; heldForPharma?: boolean }>(
+  const pr = await internalPost<{ error?: string; status?: string; link?: string; heldForPharma?: boolean; imageUploadFails?: number }>(
     '/api/wordpress/publish',
     { articleId: aid, status: p.wpPublish, uploadImages: true, pharmaGate: true, requireImages: true },
   );
@@ -322,6 +322,11 @@ async function publishArticle(aid: string): Promise<void> {
   } else {
     pub = pr.data?.status === 'publish' ? '公開済み' : pr.data?.status === 'draft' ? '下書き保存' : `投稿(${pr.data?.status})`;
     wpLink = pr.data?.link;
+  }
+  // 画像の一部がアップロード失敗（公開自体は成功）した場合は注記。再公開で補完できる。
+  const imgFails = pr.data?.imageUploadFails ?? 0;
+  if (imgFails > 0 && pub && !pub.startsWith('公開失敗')) {
+    pub = `${pub}（画像${imgFails}枚は後で補完）`;
   }
   // bulkNote(画像の注記)は上書きしない。公開結果だけ更新して done。
   await safeUpdate(aid, { bulkState: 'done', bulkStage: '', bulkPub: pub ?? null, bulkWpLink: wpLink ?? null, bulkClaimedAt: null });

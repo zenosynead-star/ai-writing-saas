@@ -329,7 +329,8 @@ export default function BulkGenerator() {
   const doneCount = counts?.done ?? rows.filter((r) => r.status === 'done').length;
   const failedCount = counts?.failed ?? rows.filter((r) => r.status === 'failed').length;
   const skippedCount = rows.filter((r) => r.status === 'skipped').length;
-  const publishedCount = rows.filter((r) => r.pub === '公開済み').length;
+  // 「公開済み」「公開済み（画像N枚は後で補完）」のどちらも公開成功として数える（完全一致だと注記付きが漏れる）
+  const publishedCount = rows.filter((r) => r.pub?.startsWith('公開済み')).length;
   const genTotal = counts?.total ?? rows.filter((r) => r.status !== 'skipped').length;
   // いま実際に動いている行（生成中・公開中）と、公開待ちの行。可視化用。
   const generatingRows = rows.filter((r) => r.rawState === 'processing');
